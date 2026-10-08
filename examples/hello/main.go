@@ -91,19 +91,20 @@ func main() {
 	ctrl := NewGreetingController(svc)
 	hook := NewLifecycleHook("gofault-hello")
 
-	// Create module with controller, provider, middleware, and lifecycle hooks
+	// Create module with controller, provider, and lifecycle hooks
 	mod := core.NewModule("hello")
 	mod.RegisterControllers(ctrl)
 	mod.RegisterProviders(svc)
 	mod.RegisterOnBoot(hook)
 	mod.RegisterOnShutdown(hook)
-	mod.RegisterMiddleware(loggingMiddleware)
 
 	// Create application
 	app := module.New()
 	app.RegisterModules(mod)
 
-	// Create and configure router with exception filter
+	// Create and configure router with exception filter.
+	// loggingMiddleware is registered on the router only: registering it on
+	// both the module and the router would run it twice per request.
 	rtr := router.New()
 	rtr.Middleware(loggingMiddleware)
 	rtr.ExceptionFilter(exception.NewHTTPExceptionFilter())

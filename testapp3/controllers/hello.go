@@ -26,11 +26,13 @@ func (c *HelloController) Prefix() string {
 
 // Index handles GET /
 func (c *HelloController) Index(ctx *core.Ctx) error {
-	return ctx.Response.Write([]byte("Hello, GoFault!"))
+	_, err := ctx.Response.Write([]byte("Hello, GoFault!"))
+	return err
 }
 
 // Greet handles GET /hello/:name
 func (c *HelloController) Greet(ctx *core.Ctx) error {
 	name := ctx.Params["name"]
-	return ctx.Response.Write([]byte("Hello, " + name + "!"))
+	_, err := ctx.Response.Write([]byte("Hello, " + name + "!"))
+	return err
 }
