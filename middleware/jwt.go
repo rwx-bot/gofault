@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,19 +14,34 @@ import (
 	"github.com/gofault/gofault/exception"
 )
 
+// jwtAlgHS256 is the only signing algorithm this package supports.
+const jwtAlgHS256 = "HS256"
+
 // JWTConfig holds JWT authentication configuration.
 type JWTConfig struct {
-	Secret    []byte
-	Algorithm string // HS256 only for simplicity
+	Secret []byte
+	// Algorithm must be HS256. Any other value is rejected at construction.
+	Algorithm string
+	// TokenName is the query parameter consulted for the token when
+	// AllowQueryToken is enabled.
 	TokenName string
+	// AllowQueryToken permits reading the token from the URL query string.
+	// Off by default: query strings land in access logs, Referer headers and
+	// browser history, which leaks the credential.
+	AllowQueryToken bool
+	// RequireExpiry rejects tokens without an exp claim. On by default so a
+	// token stays valid only as long as the issuer intended.
+	RequireExpiry bool
 }
 
 // DefaultJWTConfig returns default JWT configuration.
 func DefaultJWTConfig(secret []byte) JWTConfig {
 	return JWTConfig{
-		Secret:    secret,
-		Algorithm: "HS256",
-		TokenName: "token",
+		Secret:          secret,
+		Algorithm:       jwtAlgHS256,
+		TokenName:       "token",
+		AllowQueryToken: false,
+		RequireExpiry:   true,
 	}
 }
 
@@ -39,7 +55,9 @@ type Claims struct {
 	Issuer    string   `json:"iss"`
 }
 
-// IsValid checks if claims are valid.
+// IsValid reports whether the claims are within their validity window.
+// A zero ExpiresAt means "no expiry recorded"; callers that require a bounded
+// lifetime must check that separately (see JWTConfig.RequireExpiry).
 func (c *Claims) IsValid() bool {
 	if c.ExpiresAt == 0 {
 		return true
@@ -48,7 +66,18 @@ func (c *Claims) IsValid() bool {
 }
 
 // JWTAuth creates JWT authentication middleware.
+// It returns nil when the config is unusable, so a misconfigured secret fails
+// closed at wiring time instead of rejecting every request at runtime.
 func JWTAuth(cfg JWTConfig) core.MiddlewareFunc {
+	if len(cfg.Secret) == 0 {
+		return nil
+	}
+	if cfg.Algorithm == "" {
+		cfg.Algorithm = jwtAlgHS256
+	}
+	if cfg.Algorithm != jwtAlgHS256 {
+		return nil
+	}
 	if cfg.TokenName == "" {
 		cfg.TokenName = "token"
 	}
@@ -62,6 +91,10 @@ func JWTAuth(cfg JWTConfig) core.MiddlewareFunc {
 		claims, err := parseToken(token, cfg)
 		if err != nil {
 			return exception.Unauthorized("invalid token: " + err.Error())
+		}
+
+		if cfg.RequireExpiry && claims.ExpiresAt == 0 {
+			return exception.Unauthorized("token missing expiry")
 		}
 
 		if !claims.IsValid() {
@@ -95,7 +128,16 @@ func extractToken(ctx *core.Ctx, cfg JWTConfig) string {
 			return parts[1]
 		}
 	}
-	return ctx.Request.URL.Query().Get(cfg.TokenName)
+	if cfg.AllowQueryToken {
+		return ctx.Request.URL.Query().Get(cfg.TokenName)
+	}
+	return ""
+}
+
+// jwtHeader is the subset of the JOSE header this package reads.
+type jwtHeader struct {
+	Alg string `json:"alg"`
+	Typ string `json:"typ"`
 }
 
 // parseToken parses and verifies JWT token.
@@ -115,6 +157,18 @@ func parseToken(tokenString string, cfg JWTConfig) (*Claims, error) {
 	}
 	if !hmac.Equal(sigBytes, expectedSig) {
 		return nil, errors.New("invalid signature")
+	}
+
+	// The signature is checked first so an unauthenticated token can never
+	// influence the claims we act on. Once it holds, confirm the header
+	// actually declares the algorithm we signed with rather than trusting the
+	// token's own claim about itself.
+	hdr := &jwtHeader{}
+	if err := decodeBase64URL(header, hdr); err != nil {
+		return nil, errors.New("invalid header encoding")
+	}
+	if hdr.Alg != cfg.Algorithm {
+		return nil, errors.New("unsupported algorithm")
 	}
 
 	// Decode payload
@@ -142,9 +196,28 @@ func decodeBase64URL(encoded string, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-// GenerateToken creates a new JWT token.
+// GenerateToken creates a new JWT token signed with algorithm. Only HS256 is
+// supported; an empty value defaults to it and anything else returns an error
+// rather than silently signing with HS256 under a different label.
 func GenerateToken(claims *Claims, secret []byte, algorithm string) (string, error) {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	if len(secret) == 0 {
+		return "", errors.New("jwt: secret must not be empty")
+	}
+	if algorithm == "" {
+		algorithm = jwtAlgHS256
+	}
+	if algorithm != jwtAlgHS256 {
+		return "", fmt.Errorf("jwt: unsupported algorithm %q (only %s supported)", algorithm, jwtAlgHS256)
+	}
+	if claims == nil {
+		return "", errors.New("jwt: claims must not be nil")
+	}
+
+	headerJSON, err := json.Marshal(&jwtHeader{Alg: algorithm, Typ: "JWT"})
+	if err != nil {
+		return "", err
+	}
+	header := base64.RawURLEncoding.EncodeToString(headerJSON)
 
 	if claims.IssuedAt == 0 {
 		claims.IssuedAt = time.Now().Unix()

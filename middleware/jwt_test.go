@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,10 +130,11 @@ func TestJWTAuth_BearerCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestJWTAuth_TokenFromQueryParam(t *testing.T) {
+// Query-string tokens are off by default because they leak into access logs,
+// Referer headers and browser history.
+func TestJWTAuth_TokenFromQueryParamDisabledByDefault(t *testing.T) {
 	secret := []byte("test-secret")
-	cfg := DefaultJWTConfig(secret)
-	middleware := JWTAuth(cfg)
+	middleware := JWTAuth(DefaultJWTConfig(secret))
 
 	claims := &Claims{
 		Subject:   "user123",
@@ -142,8 +146,103 @@ func TestJWTAuth_TokenFromQueryParam(t *testing.T) {
 	ctx := &core.Ctx{Request: req}
 
 	err := middleware(ctx, func(ctx *core.Ctx) error { return nil })
-	if err != nil {
+	if err == nil {
+		t.Fatal("expected rejection of query token, got nil")
+	}
+}
+
+func TestJWTAuth_TokenFromQueryParamAllowedWhenOptedIn(t *testing.T) {
+	secret := []byte("test-secret")
+	cfg := DefaultJWTConfig(secret)
+	cfg.AllowQueryToken = true
+	middleware := JWTAuth(cfg)
+
+	claims := &Claims{
+		Subject:   "user123",
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}
+	token, _ := GenerateToken(claims, secret, "HS256")
+
+	req := httptest.NewRequest("GET", "/test?token="+url.QueryEscape(token), nil)
+	ctx := &core.Ctx{Request: req}
+
+	if err := middleware(ctx, func(ctx *core.Ctx) error { return nil }); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// A token with no exp claim would otherwise stay valid forever.
+func TestJWTAuth_RejectsTokenWithoutExpiry(t *testing.T) {
+	secret := []byte("test-secret")
+	middleware := JWTAuth(DefaultJWTConfig(secret))
+
+	claims := &Claims{Subject: "user123", ExpiresAt: 0}
+	token, err := GenerateToken(claims, secret, "HS256")
+	if err != nil {
+		t.Fatalf("GenerateToken() error = %v", err)
+	}
+	// Strip the expiry that GenerateToken fills in, simulating a foreign
+	// issuer that never set exp.
+	parts := strings.SplitN(token, ".", 3)
+	payload, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	var m map[string]interface{}
+	json.Unmarshal(payload, &m)
+	delete(m, "exp")
+	newPayload, _ := json.Marshal(m)
+	unsigned := parts[0] + "." + base64.RawURLEncoding.EncodeToString(newPayload)
+	sig := sign([]byte(unsigned), secret)
+	token = unsigned + "." + base64.RawURLEncoding.EncodeToString(sig)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	ctx := &core.Ctx{Request: req}
+
+	if err := middleware(ctx, func(ctx *core.Ctx) error { return nil }); err == nil {
+		t.Fatal("expected rejection of token without exp, got nil")
+	}
+}
+
+// An unsigned alg=none token must never be accepted.
+func TestJWTAuth_RejectsAlgNone(t *testing.T) {
+	secret := []byte("test-secret")
+	middleware := JWTAuth(DefaultJWTConfig(secret))
+
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	claims := &Claims{Subject: "attacker", ExpiresAt: time.Now().Add(time.Hour).Unix()}
+	payloadBytes, _ := json.Marshal(claims)
+	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
+	token := header + "." + payload + "."
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	ctx := &core.Ctx{Request: req}
+
+	if err := middleware(ctx, func(ctx *core.Ctx) error { return nil }); err == nil {
+		t.Fatal("expected rejection of alg=none token, got nil")
+	}
+}
+
+func TestJWTAuth_NilOnUnusableConfig(t *testing.T) {
+	if mw := JWTAuth(JWTConfig{Algorithm: "HS256"}); mw != nil {
+		t.Error("expected nil middleware for empty secret")
+	}
+	if mw := JWTAuth(JWTConfig{Secret: []byte("s"), Algorithm: "RS256"}); mw != nil {
+		t.Error("expected nil middleware for unsupported algorithm")
+	}
+}
+
+func TestGenerateToken_RejectsUnsupportedAlgorithm(t *testing.T) {
+	secret := []byte("test-secret")
+	claims := &Claims{Subject: "u"}
+
+	if _, err := GenerateToken(claims, secret, "none"); err == nil {
+		t.Error("expected error for alg=none")
+	}
+	if _, err := GenerateToken(claims, secret, "RS256"); err == nil {
+		t.Error("expected error for RS256")
+	}
+	if _, err := GenerateToken(claims, nil, "HS256"); err == nil {
+		t.Error("expected error for empty secret")
 	}
 }
 
