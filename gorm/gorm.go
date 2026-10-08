@@ -3,7 +3,6 @@ package gorm
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/gofault/gofault/core"
@@ -59,11 +58,6 @@ type Database struct {
 	Config Config
 }
 
-var (
-	dbInstance *Database
-	dbOnce     sync.Once
-)
-
 // NewDatabase creates a new Database module.
 func NewDatabase(name string, config Config) (*Database, error) {
 	db, err := openDB(config)
@@ -99,6 +93,12 @@ func (d *Database) GetDB() *gorm.DB {
 func openDB(config Config) (*gorm.DB, error) {
 	gormConfig := &gorm.Config{
 		Logger: logger.Default.LogMode(config.LogLevel),
+	}
+	if config.Silent {
+		// Silent was documented as suppressing all GORM logs but was never
+		// consulted, so LogLevel alone decided the verbosity. Discard is used
+		// rather than LogMode(Silent) so nothing is emitted at all.
+		gormConfig.Logger = logger.Discard
 	}
 
 	var dialector gorm.Dialector
@@ -172,6 +172,15 @@ func Transaction(db *gorm.DB, fn func(tx *gorm.DB) error) error {
 	}
 
 	if err := tx.Commit().Error; err != nil {
+		// Roll back on a failed commit too. database/sql requires it: a
+		// transaction whose Commit fails is still open, and the connection
+		// stays checked out of the pool until it is rolled back or the pool
+		// reclaims it. Note this is not covered by a test -- the sqlite
+		// driver used here reclaims the connection on its own, so the two
+		// paths cannot be distinguished from the outside.
+		if rbErr := tx.Rollback().Error; rbErr != nil {
+			return fmt.Errorf("commit: %s, rollback: %w", err, rbErr)
+		}
 		return fmt.Errorf("commit: %w", err)
 	}
 

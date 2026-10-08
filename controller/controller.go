@@ -37,15 +37,30 @@ func Query(ctx *core.Ctx, name string) string {
 	return ctx.Request.URL.Query().Get(name)
 }
 
-// InvokeHandler dispatches to the appropriate controller method based on HTTP method and path.
+// InvokeHandler dispatches to the named controller method.
+//
+// The method must have the signature func(*core.Ctx) error. A method that
+// exists but has a different signature is a programming error, and is reported
+// as such rather than panicking: a bare type assertion on an action with the
+// wrong signature would take the process down from inside request handling.
 func InvokeHandler(ctrl core.Controller, method, path, handlerName string, ctx *core.Ctx) error {
 	v := reflect.ValueOf(ctrl)
 	methodVal := v.MethodByName(handlerName)
 	if !methodVal.IsValid() {
 		return fmt.Errorf("handler method %q not found on controller", handlerName)
 	}
-	fn := methodVal.Interface().(func(ctx *core.Ctx) error)
-	return fn(ctx)
+
+	// Compare structurally: a method's reflected type is the unnamed func
+	// type, so it never equals the named ControllerMethod even when the
+	// signatures are identical.
+	mt := methodVal.Type()
+	if mt.Kind() != reflect.Func || mt.NumIn() != 1 || mt.NumOut() != 1 ||
+		mt.In(0) != reflect.TypeOf((*core.Ctx)(nil)) ||
+		mt.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
+		return fmt.Errorf("handler method %q has signature %s, want func(*core.Ctx) error", handlerName, mt)
+	}
+
+	return methodVal.Interface().(func(ctx *core.Ctx) error)(ctx)
 }
 
 // ControllerMethod is the signature for controller action methods.

@@ -2,6 +2,7 @@ package exception
 
 import (
 	"encoding/json"
+	"runtime"
 
 	"github.com/gofault/gofault/core"
 )
@@ -10,11 +11,17 @@ import (
 type HTTPExceptionResponse struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	// Stack is only populated when HTTPExceptionFilter.IncludeStackTrace is
+	// set. It exposes internal file paths and function names, so it must stay
+	// off outside development.
+	Stack string `json:"stack,omitempty"`
 }
 
 // HTTPExceptionFilter is a filter that handles HTTPException errors.
 type HTTPExceptionFilter struct {
 	// IncludeStackTrace includes error stack in response (for debugging).
+	// Leave it off outside development: the stack exposes internal paths and
+	// symbols to the client.
 	IncludeStackTrace bool
 }
 
@@ -40,6 +47,9 @@ func (f *HTTPExceptionFilter) Capture(ctxAny any, err error) bool {
 		Code:    httpErr.GetCode(),
 		Message: httpErr.GetMessage(),
 	}
+	if f.IncludeStackTrace {
+		resp.Stack = captureStack()
+	}
 
 	w := ctx.Response
 	// Content-Type must be set before WriteHeader: once the status line is
@@ -47,11 +57,15 @@ func (f *HTTPExceptionFilter) Capture(ctxAny any, err error) bool {
 	// which would leave the JSON body sniffed as text/plain.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpErr.GetStatusCode())
-	json.NewEncoder(w).Encode(map[string]any{
-		"code":    resp.Code,
-		"message": resp.Message,
-	})
+	_ = json.NewEncoder(w).Encode(resp)
 	return true
+}
+
+// captureStack renders the stack of the goroutine handling the request.
+func captureStack() string {
+	buf := make([]byte, 8<<10)
+	n := runtime.Stack(buf, false)
+	return string(buf[:n])
 }
 
 // DefaultFilter returns the global default HTTP exception filter.

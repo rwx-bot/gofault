@@ -71,7 +71,15 @@ type Config struct {
 // HeaderConfig creates a header-based versioning config.
 // headerVersionFormat uses %d for numeric version, %s for string version.
 // Example: "application/vnd.api+json;version=v%d" extracts "1" from "v1".
+//
+// headerVersionRE may be nil, in which case one is derived from
+// headerVersionFormat. The field used to be stored but never applied, so a
+// caller who supplied only the documented format got DefaultVersion for every
+// request.
 func HeaderConfig(header, headerVersionFormat string, headerVersionRE *regexp.Regexp, defaultVersion int) Config {
+	if headerVersionRE == nil && headerVersionFormat != "" {
+		headerVersionRE = compileVersionFormat(headerVersionFormat)
+	}
 	return Config{
 		Strategy:            StrategyHeader,
 		Header:              header,
@@ -80,6 +88,33 @@ func HeaderConfig(header, headerVersionFormat string, headerVersionRE *regexp.Re
 		DefaultVersion:      defaultVersion,
 		DefaultStatus:       VersionStatusActive,
 	}
+}
+
+// compileVersionFormat turns a printf-style version format into a regexp with
+// one capturing group around the version. For example
+// "application/vnd.api+json;version=v%d" yields a pattern whose first group
+// captures the digits after "version=v", so FindStringSubmatch yields the
+// version in matches[1] as the middleware expects.
+func compileVersionFormat(format string) *regexp.Regexp {
+	// Split on the verb so the placeholder can be captured.
+	parts := strings.SplitN(format, "%", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+
+	var b strings.Builder
+	b.WriteString("^")
+	b.WriteString(regexp.QuoteMeta(parts[0]))
+	b.WriteString(`(.*)`)
+	// The verb and any trailing text stay outside the capture.
+	b.WriteString(regexp.QuoteMeta(parts[1][1:]))
+	b.WriteString("$")
+
+	re, err := regexp.Compile(b.String())
+	if err != nil {
+		return nil
+	}
+	return re
 }
 
 // PathPrefixConfig creates a path-prefix based versioning config.

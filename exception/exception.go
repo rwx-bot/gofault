@@ -2,6 +2,7 @@
 package exception
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -132,15 +133,23 @@ func ServiceUnavailable(message string) error {
 }
 
 // IsHTTPException checks if an error is an HTTPException.
+// The whole wrap chain is inspected, so an HTTPException decorated with fmt.Errorf
+// and %w is still recognised.
 func IsHTTPException(err error) bool {
-	_, ok := err.(HTTPException)
+	_, ok := HTTPExceptionOf(err)
 	return ok
 }
 
-// HTTPExceptionOf tries to cast an error to HTTPException.
+// HTTPExceptionOf tries to cast an error to HTTPException, unwrapping as needed.
+// errors.As is used rather than a direct type assertion because callers are
+// expected to add context with Wrap or fmt.Errorf("%w"); a bare assertion would
+// report those as unrecognised and downgrade the response to 500.
 func HTTPExceptionOf(err error) (HTTPException, bool) {
-	httpErr, ok := err.(HTTPException)
-	return httpErr, ok
+	var httpErr HTTPException
+	if errors.As(err, &httpErr) {
+		return httpErr, true
+	}
+	return nil, false
 }
 
 // New creates a generic HTTP exception with custom status, code, and message.

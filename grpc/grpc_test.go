@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/grpc/testdata"
 )
@@ -99,19 +101,86 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+// A recovered panic must surface as an error. Returning only the recover()
+// left the named results at (nil, nil), so gRPC reported the call as a success
+// with a nil response.
 func TestRecoveryInterceptor(t *testing.T) {
 	interceptor := RecoveryInterceptor()
 
-	// Test that it doesn't panic
 	ctx := context.Background()
-	_, err := interceptor(ctx, "test request", &grpc.UnaryServerInfo{}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	resp, err := interceptor(ctx, "test request", &grpc.UnaryServerInfo{}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		panic("test panic")
 	})
 
-	// Should not panic, error should be logged
-	// The panic is recovered, so we just verify it doesn't crash
+	if err == nil {
+		t.Fatal("expected an error after a recovered panic, got nil")
+	}
+	if resp != nil {
+		t.Errorf("expected a nil response after a recovered panic, got %v", resp)
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("status code = %v, want %v", code, codes.Internal)
+	}
+}
+
+// The non-panicking path must still return the handler's own values.
+func TestRecoveryInterceptor_PassesThrough(t *testing.T) {
+	interceptor := RecoveryInterceptor()
+
+	resp, err := interceptor(context.Background(), "req", &grpc.UnaryServerInfo{},
+		func(ctx context.Context, req interface{}) (interface{}, error) {
+			return "ok", nil
+		})
+
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "ok" {
+		t.Errorf("resp = %v, want ok", resp)
+	}
+}
+
+// UnaryInterceptor and StreamInterceptor have the same recovery contract.
+func TestUnaryInterceptor_PanicBecomesError(t *testing.T) {
+	interceptor := UnaryInterceptor(func(ctx context.Context, req interface{}) (interface{}, error) {
+		panic("boom")
+	})
+
+	resp, err := interceptor(context.Background(), "req", &grpc.UnaryServerInfo{}, nil)
+	if err == nil {
+		t.Fatal("expected an error after a recovered panic, got nil")
+	}
+	if resp != nil {
+		t.Errorf("expected a nil response, got %v", resp)
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("status code = %v, want %v", code, codes.Internal)
+	}
+}
+
+func TestStreamRecoveryInterceptor_PanicBecomesError(t *testing.T) {
+	interceptor := StreamRecoveryInterceptor()
+
+	err := interceptor(nil, nil, &grpc.StreamServerInfo{}, func(srv interface{}, ss grpc.ServerStream) error {
+		panic("stream boom")
+	})
+	if err == nil {
+		t.Fatal("expected an error after a recovered panic, got nil")
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("status code = %v, want %v", code, codes.Internal)
+	}
+}
+
+// A nil info must not cause a second panic while the first is being reported.
+func TestRecoveryInterceptor_NilInfo(t *testing.T) {
+	interceptor := RecoveryInterceptor()
+
+	_, err := interceptor(context.Background(), "req", nil, func(ctx context.Context, req interface{}) (interface{}, error) {
+		panic("boom")
+	})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
 	}
 }
 

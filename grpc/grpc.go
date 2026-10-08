@@ -4,14 +4,18 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 
 	"github.com/gofault/gofault/core"
 )
@@ -162,13 +166,35 @@ func (s *Server) Address() string {
 	return s.listener.Addr().String()
 }
 
+// logRPCPanic records a recovered panic. Every interceptor here must convert a
+// panic into an error: recovering without returning one leaves the named return
+// values at their zero value, so gRPC would report the call as a success with a
+// nil response and no error.
+func logRPCPanic(method, kind string, r interface{}) {
+	slog.Default().Error("grpc panic recovered",
+		"kind", kind, "method", method, "panic", r, "stack", string(debug.Stack()))
+}
+
+// panicError converts a recovered panic into a gRPC error.
+func panicError(r interface{}) error {
+	return status.Errorf(codes.Internal, "panic recovered: %v", r)
+}
+
+// methodName extracts the full method name, tolerating a nil info.
+func methodName(fullMethod string) string { return fullMethod }
+
 // UnaryInterceptor adapts a function to grpc.UnaryServerInterceptor.
-// The adapter recovers from panics and calls the handler.
+//
+// The adapter recovers from panics in fn and reports them as Internal errors.
+// It intentionally does not invoke the next handler: fn is the whole operation.
+// Chain RecoveryInterceptor or LoggingInterceptor separately when they are
+// needed alongside it.
 func UnaryInterceptor(fn func(ctx context.Context, req interface{}) (interface{}, error)) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("grpc panic recovered: %v\n", r)
+				logRPCPanic(methodName(infoFullMethod(info)), "unary", r)
+				resp, err = nil, panicError(r)
 			}
 		}()
 		return fn(ctx, req)
@@ -176,39 +202,61 @@ func UnaryInterceptor(fn func(ctx context.Context, req interface{}) (interface{}
 }
 
 // StreamInterceptor adapts a function to grpc.StreamServerInterceptor.
+// A panic in fn is recovered and returned as an Internal error.
 func StreamInterceptor(fn func(srv interface{}, ss grpc.ServerStream) error) grpc.StreamServerInterceptor {
-	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("grpc stream panic recovered: %v\n", r)
+				logRPCPanic(methodName(infoFullMethodStream(info)), "stream", r)
+				err = panicError(r)
 			}
 		}()
 		return fn(srv, ss)
 	}
 }
 
-// RecoveryInterceptor returns a unary interceptor that recovers from panics.
+// RecoveryInterceptor returns a unary interceptor that recovers from panics in
+// the handler and reports them as Internal errors.
 func RecoveryInterceptor() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("grpc panic recovered: %v\n", r)
+				logRPCPanic(methodName(infoFullMethod(info)), "unary", r)
+				resp, err = nil, panicError(r)
 			}
 		}()
 		return handler(ctx, req)
 	}
 }
 
-// StreamRecoveryInterceptor returns a stream interceptor that recovers from panics.
+// StreamRecoveryInterceptor returns a stream interceptor that recovers from
+// panics in the handler and reports them as Internal errors.
 func StreamRecoveryInterceptor() grpc.StreamServerInterceptor {
-	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("grpc stream panic recovered: %v\n", r)
+				logRPCPanic(methodName(infoFullMethodStream(info)), "stream", r)
+				err = panicError(r)
 			}
 		}()
 		return handler(srv, ss)
 	}
+}
+
+// infoFullMethod and infoFullMethodStream read the method name defensively:
+// gRPC always supplies info, but a nil one must not mask a panic being reported.
+func infoFullMethod(info *grpc.UnaryServerInfo) string {
+	if info == nil {
+		return ""
+	}
+	return info.FullMethod
+}
+
+func infoFullMethodStream(info *grpc.StreamServerInfo) string {
+	if info == nil {
+		return ""
+	}
+	return info.FullMethod
 }
 
 // LoggingInterceptor returns a unary interceptor that logs requests.
@@ -216,7 +264,17 @@ func LoggingInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		start := time.Now()
 		resp, err := handler(ctx, req)
-		fmt.Printf("grpc: %s %s %v\n", info.FullMethod, time.Since(start), err)
+
+		attrs := []any{
+			"method", infoFullMethod(info),
+			"duration", time.Since(start),
+			"error", err,
+		}
+		if err != nil {
+			slog.Default().Warn("grpc request failed", attrs...)
+		} else {
+			slog.Default().Info("grpc request", attrs...)
+		}
 		return resp, err
 	}
 }

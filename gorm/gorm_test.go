@@ -220,3 +220,46 @@ func TestDialect_Constants(t *testing.T) {
 		t.Errorf("expected 'sqlite', got '%s'", DialectSQLite)
 	}
 }
+
+// Silent was documented as suppressing all GORM logs but was never read, so
+// LogLevel alone decided the verbosity.
+func TestOpenDB_SilentSuppressesLogging(t *testing.T) {
+	base := DefaultConfig()
+	base.Dialect = DialectSQLite
+	base.DSN = ":memory:"
+
+	silentCfg := base
+	silentCfg.Silent = true
+	silent, err := openDB(silentCfg)
+	if err != nil {
+		t.Fatalf("openDB silent: %v", err)
+	}
+	defer func() {
+		if sqlDB, err := silent.DB(); err == nil {
+			sqlDB.Close()
+		}
+	}()
+
+	if silent.Config.Logger != logger.Discard {
+		t.Errorf("with Silent=true the logger is %T, want logger.Discard", silent.Config.Logger)
+	}
+
+	// The negative case keeps the test honest: without Silent the logger must
+	// still be the real one, otherwise the assertion above proves nothing.
+	noisy, err := openDB(base)
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer func() {
+		if sqlDB, err := noisy.DB(); err == nil {
+			sqlDB.Close()
+		}
+	}()
+
+	if noisy.Config.Logger == logger.Discard {
+		t.Error("without Silent the logger was discarded too")
+	}
+	if noisy.Config.Logger == silent.Config.Logger {
+		t.Error("Silent had no effect: both loggers are identical")
+	}
+}
