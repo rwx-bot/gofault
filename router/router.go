@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/gofault/gofault/core"
 	"github.com/gofault/gofault/exception"
@@ -17,7 +18,12 @@ type Router struct {
 	middleware      []core.MiddlewareFunc
 	routes          []routeEntry
 	exceptionFilter exception.ExceptionFilter
-	container       *ioc.Container
+
+	// container is read on every request but written once by SetContainer,
+	// which App.Start calls after routes are wired. Access is guarded so the
+	// handoff cannot race with in-flight requests.
+	mu        sync.RWMutex
+	container *ioc.Container
 }
 
 type routeEntry struct {
@@ -45,7 +51,16 @@ func New() *Router {
 
 // SetContainer binds an IoC container to the router for request scope management.
 func (r *Router) SetContainer(c *ioc.Container) {
+	r.mu.Lock()
 	r.container = c
+	r.mu.Unlock()
+}
+
+// getContainer returns the bound container, or nil when none is attached.
+func (r *Router) getContainer() *ioc.Container {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.container
 }
 
 // Middleware appends global middleware to the router.
@@ -96,10 +111,10 @@ func buildPattern(path string) (*regexp.Regexp, []string) {
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Begin request scope if a container is attached.
 	var reqCtx context.Context
-	if r.container != nil {
-		reqCtx = r.container.BeginRequest(req.Context())
+	if c := r.getContainer(); c != nil {
+		reqCtx = c.BeginRequest(req.Context())
 		req = req.WithContext(reqCtx)
-		defer r.container.EndRequest(reqCtx)
+		defer c.EndRequest(reqCtx)
 	}
 
 	for _, route := range r.routes {
@@ -118,8 +133,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 
-		chain := append(r.middleware, route.middleware...)
-		chain = append(chain, core.MiddlewareFunc(func(ctx *core.Ctx, next core.Handler) error {
+		// Build the chain in a fresh slice. Appending onto r.middleware
+		// directly would write into its backing array whenever it has spare
+		// capacity, so concurrent requests would overwrite each other's
+		// per-route middleware and possibly run the wrong chain.
+		chain := make([]core.MiddlewareFunc, 0, len(r.middleware)+len(route.middleware)+1)
+		chain = append(chain, r.middleware...)
+		chain = append(chain, route.middleware...)
+		chain = append(chain, core.MiddlewareFunc(func(ctx *core.Ctx, _ core.Handler) error {
 			return route.handler(ctx)
 		}))
 		err := runChain(ctx, chain, 0)

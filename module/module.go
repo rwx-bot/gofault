@@ -3,6 +3,7 @@ package module
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/gofault/gofault/controller"
 	"github.com/gofault/gofault/core"
@@ -18,8 +19,13 @@ type App struct {
 	rtr       *router.Router
 	modules   []*core.Module // sorted by dependency order
 	moduleMap map[string]*core.Module
-	server    *server.HTTP
-	booted    bool
+
+	// mu guards server, booted and the router wiring below them. Start runs on
+	// the caller's goroutine while Stop is conventionally invoked from a
+	// signal handler, so those fields are written and read concurrently.
+	mu     sync.Mutex
+	server *server.HTTP
+	booted bool
 }
 
 // New creates a new application instance.
@@ -149,24 +155,30 @@ func (a *App) Bootstrap() error {
 			}
 		}
 	}
+	a.mu.Lock()
 	a.booted = true
+	a.mu.Unlock()
 	return nil
 }
 
 // Start launches the HTTP server on the given port.
 func (a *App) Start(port int) error {
-	if !a.booted {
+	a.mu.Lock()
+	booted := a.booted
+	a.mu.Unlock()
+
+	if !booted {
 		if err := a.Bootstrap(); err != nil {
 			return fmt.Errorf("bootstrap failed: %w", err)
 		}
 	}
 
 	// Wire container into router for request-scoped dependency injection.
+	a.mu.Lock()
 	if a.rtr != nil {
-		if r, ok := any(a.rtr).(*router.Router); ok {
-			r.SetContainer(a.container)
-		}
+		a.rtr.SetContainer(a.container)
 	}
+	a.mu.Unlock()
 
 	// Run OnBoot hooks.
 	for _, mod := range a.modules {
@@ -177,8 +189,12 @@ func (a *App) Start(port int) error {
 		}
 	}
 
-	a.server = server.New(a.rtr, port)
-	return a.server.Start()
+	srv := server.New(a.rtr, port)
+	a.mu.Lock()
+	a.server = srv
+	a.mu.Unlock()
+
+	return srv.Start()
 }
 
 // Stop gracefully shuts down the server and calls OnShutdown hooks.
@@ -196,8 +212,12 @@ func (a *App) Stop() error {
 		}
 	}
 
-	if a.server != nil {
-		if err := a.server.Stop(); err != nil {
+	a.mu.Lock()
+	srv := a.server
+	a.mu.Unlock()
+
+	if srv != nil {
+		if err := srv.Stop(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -211,4 +231,19 @@ func (a *App) Stop() error {
 // Container returns the IoC container (exposed for testing).
 func (a *App) Container() *ioc.Container {
 	return a.container
+}
+
+// Router returns the router the app serves, for tests that need to issue
+// requests without going through a listening socket.
+func (a *App) Router() *router.Router {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.rtr
+}
+
+// serverReady reports whether Start has installed the HTTP server.
+func (a *App) serverReady() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.server != nil
 }

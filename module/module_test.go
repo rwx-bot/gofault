@@ -1,9 +1,11 @@
 package module
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gofault/gofault/controller"
 	"github.com/gofault/gofault/core"
@@ -217,4 +219,184 @@ func TestApp_ProvidersRegistered(t *testing.T) {
 	app.RegisterModules(mod)
 
 	// Just verify that registration doesn't panic.
+}
+
+// errInitHook fails OnInit so Init error handling can be exercised.
+type errInitHook struct{ dummyHook }
+
+func (h *errInitHook) OnInit() error { return errors.New("init boom") }
+
+func TestApp_Init_RunsHooksInDependencyOrder(t *testing.T) {
+	app := New()
+
+	base := core.NewModule("base")
+	dependent := core.NewModule("dependent")
+	dependent.Depends = []string{"base"}
+
+	order := []string{}
+	base.RegisterOnInit(&recordingHook{name: "base", order: &order})
+	dependent.RegisterOnInit(&recordingHook{name: "dependent", order: &order})
+
+	app.RegisterModules(dependent, base)
+
+	if err := app.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if len(order) != 2 || order[0] != "base" || order[1] != "dependent" {
+		t.Errorf("init order = %v, want [base dependent]", order)
+	}
+}
+
+func TestApp_Init_PropagatesHookError(t *testing.T) {
+	app := New()
+	mod := core.NewModule("boom")
+	mod.RegisterOnInit(&errInitHook{})
+	app.RegisterModules(mod)
+
+	if err := app.Init(); err == nil {
+		t.Error("expected Init to surface the OnInit failure")
+	}
+}
+
+func TestApp_Init_RejectsUnknownDependency(t *testing.T) {
+	app := New()
+	mod := core.NewModule("a")
+	mod.Depends = []string{"nope"}
+	app.RegisterModules(mod)
+
+	if err := app.Init(); err == nil {
+		t.Error("expected Init to reject a dependency on an unregistered module")
+	}
+}
+
+func TestApp_Init_RejectsDependencyCycle(t *testing.T) {
+	app := New()
+	a := core.NewModule("a")
+	b := core.NewModule("b")
+	a.Depends = []string{"b"}
+	b.Depends = []string{"a"}
+	app.RegisterModules(a, b)
+
+	if err := app.Init(); err == nil {
+		t.Error("expected Init to reject a dependency cycle")
+	}
+}
+
+// Start blocks, so run it on a goroutine and shut it down via Stop.
+func TestApp_StartAndStop(t *testing.T) {
+	app := New()
+	mod := core.NewModule("test")
+	mod.RegisterControllers(&dummyController{})
+	hook := &dummyHook{}
+	mod.RegisterOnBoot(hook)
+	mod.RegisterOnShutdown(hook)
+	app.RegisterModules(mod)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Start(0) }()
+
+	// Wait for the server to be up, then verify the route serves.
+	var lastCode int
+	for i := 0; i < 100; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if !app.serverReady() {
+			continue
+		}
+		req := httptest.NewRequest("GET", "/test/", nil)
+		w := httptest.NewRecorder()
+		app.rtr.ServeHTTP(w, req)
+		lastCode = w.Code
+		break
+	}
+	if lastCode != http.StatusOK {
+		t.Fatalf("expected the running server to answer 200, got %d", lastCode)
+	}
+	if !hook.bootCalled {
+		t.Error("OnBoot hook was not called by Start")
+	}
+
+	if err := app.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if !hook.shutdownCalled {
+		t.Error("OnShutdown hook was not called by Stop")
+	}
+
+	// Start returns once the listener is closed.
+	select {
+	case <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
+}
+
+func TestApp_Stop_WithoutStartIsSafe(t *testing.T) {
+	app := New()
+	app.RegisterModules(core.NewModule("test"))
+
+	if err := app.Stop(); err != nil {
+		t.Errorf("Stop without a running server should be a no-op, got %v", err)
+	}
+}
+
+func TestApp_Stop_CollectsHookErrors(t *testing.T) {
+	app := New()
+	mod := core.NewModule("test")
+	mod.RegisterOnShutdown(&dummyHook{shutdownErr: errors.New("shutdown boom")})
+	app.RegisterModules(mod)
+
+	if err := app.Stop(); err == nil {
+		t.Error("expected Stop to report the OnShutdown failure")
+	}
+}
+
+func TestApp_Start_PropagatesBootHookError(t *testing.T) {
+	app := New()
+	mod := core.NewModule("test")
+	mod.RegisterOnBoot(&dummyHook{bootErr: errors.New("boot boom")})
+	app.RegisterModules(mod)
+
+	if err := app.Start(0); err == nil {
+		t.Error("expected Start to surface the OnBoot failure")
+	}
+}
+
+func TestApp_Start_WiresContainerIntoRouter(t *testing.T) {
+	app := New()
+	mod := core.NewModule("test")
+	mod.RegisterControllers(&dummyController{})
+	app.RegisterModules(mod)
+	if err := app.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	go func() { _ = app.Start(0) }()
+	for i := 0; i < 100 && !app.serverReady(); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer app.Stop()
+
+	// The container must be reachable from a request-scoped provider.
+	if app.Container() == nil {
+		t.Fatal("expected a container on the app")
+	}
+	rtr := app.Router()
+	req := httptest.NewRequest("GET", "/test/", nil)
+	w := httptest.NewRecorder()
+	rtr.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 after Start wired the container, got %d", w.Code)
+	}
+}
+
+// recordingHook appends its name to order when OnInit runs.
+type recordingHook struct {
+	dummyHook
+	name  string
+	order *[]string
+}
+
+func (h *recordingHook) OnInit() error {
+	*h.order = append(*h.order, h.name)
+	return nil
 }
