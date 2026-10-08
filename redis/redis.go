@@ -4,7 +4,6 @@ package redis
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/gofault/gofault/core"
@@ -54,11 +53,6 @@ type Client struct {
 	Config Config
 }
 
-var (
-	clientInstance *Client
-	clientOnce     sync.Once
-)
-
 // NewClient creates a new Redis client module.
 func NewClient(name string, config Config) (*Client, error) {
 	rdb := redis.NewClient(&redis.Options{
@@ -83,6 +77,9 @@ func NewClient(name string, config Config) (*Client, error) {
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
+		// The client opened a pool before the probe; without closing it a
+		// failed NewClient leaks the connection and its goroutines.
+		rdb.Close()
 		return nil, fmt.Errorf("redis ping: %w", err)
 	}
 
