@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -31,12 +32,57 @@ func TestNewClient_Invalid(t *testing.T) {
 	}
 }
 
-func TestLock_AcquireRelease(t *testing.T) {
-	// Skip if no Redis available
+func TestConfig_ZeroConnMaxLifetime(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Addr = "localhost:9999"
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Addr})
-	defer rdb.Close()
+	cfg.ConnMaxLifetime = 0 // means no limit
+	rdb := redis.NewClient(&redis.Options{
+		Addr: cfg.Addr,
+		ConnMaxLifetime: func() time.Duration {
+			if cfg.ConnMaxLifetime == 0 {
+				return 0
+			}
+			return time.Duration(cfg.ConnMaxLifetime) * time.Second
+		}(),
+	})
+	if rdb == nil {
+		t.Fatal("rdb is nil")
+	}
+	rdb.Close()
+}
+
+// redisAddr resolves the address of the Redis instance used by the integration
+// tests below. It honours GOFAULT_REDIS_ADDR so CI can point the tests at a
+// provisioned service, and otherwise falls back to the conventional local port.
+func redisAddr() string {
+	if addr := os.Getenv("GOFAULT_REDIS_ADDR"); addr != "" {
+		return addr
+	}
+	return "127.0.0.1:6379"
+}
+
+// newTestClient dials Redis and skips the calling test when no server answers.
+// The integration tests assert against real server semantics (Lua scripts,
+// key expiry), so they need a live instance - but they must not turn a missing
+// Redis into a failure on developer machines.
+func newTestClient(t *testing.T) *redis.Client {
+	t.Helper()
+
+	addr := redisAddr()
+	rdb := redis.NewClient(&redis.Options{Addr: addr})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		_ = rdb.Close()
+		t.Skipf("redis is not available at %s: %v", addr, err)
+	}
+
+	t.Cleanup(func() { _ = rdb.Close() })
+	return rdb
+}
+
+func TestLock_AcquireRelease(t *testing.T) {
+	rdb := newTestClient(t)
 
 	ctx := context.Background()
 	lock := NewLock(rdb, "test-lock", "unique-value", 5*time.Second)
@@ -67,10 +113,7 @@ func TestLock_AcquireRelease(t *testing.T) {
 }
 
 func TestLock_ReleaseWrongOwner(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Addr = "localhost:9999"
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Addr})
-	defer rdb.Close()
+	rdb := newTestClient(t)
 
 	ctx := context.Background()
 	lock1 := NewLock(rdb, "test-lock2", "owner1", 5*time.Second)
@@ -98,10 +141,7 @@ func TestLock_ReleaseWrongOwner(t *testing.T) {
 }
 
 func TestCache_Operations(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Addr = "localhost:9999"
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Addr})
-	defer rdb.Close()
+	rdb := newTestClient(t)
 
 	cache := NewCache(rdb, "testns", 10*time.Second)
 	ctx := context.Background()
@@ -145,10 +185,7 @@ func TestCache_Operations(t *testing.T) {
 }
 
 func TestCache_KeyPrefix(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Addr = "localhost:9999"
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Addr})
-	defer rdb.Close()
+	rdb := newTestClient(t)
 
 	cache := NewCache(rdb, "myapp", 10*time.Second)
 	ctx := context.Background()
@@ -166,10 +203,7 @@ func TestCache_KeyPrefix(t *testing.T) {
 }
 
 func TestCache_DefaultTTL(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Addr = "localhost:9999"
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Addr})
-	defer rdb.Close()
+	rdb := newTestClient(t)
 
 	// 100ms TTL
 	cache := NewCache(rdb, "ttltest", 100*time.Millisecond)
@@ -194,29 +228,8 @@ func TestCache_DefaultTTL(t *testing.T) {
 	}
 }
 
-func TestConfig_ZeroConnMaxLifetime(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ConnMaxLifetime = 0 // means no limit
-	rdb := redis.NewClient(&redis.Options{
-		Addr: cfg.Addr,
-		ConnMaxLifetime: func() time.Duration {
-			if cfg.ConnMaxLifetime == 0 {
-				return 0
-			}
-			return time.Duration(cfg.ConnMaxLifetime) * time.Second
-		}(),
-	})
-	if rdb == nil {
-		t.Fatal("rdb is nil")
-	}
-	rdb.Close()
-}
-
 func TestSetGetDelete(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Addr = "localhost:9999"
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Addr})
-	defer rdb.Close()
+	rdb := newTestClient(t)
 
 	ctx := context.Background()
 
@@ -245,10 +258,7 @@ func TestSetGetDelete(t *testing.T) {
 }
 
 func TestExists(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Addr = "localhost:9999"
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Addr})
-	defer rdb.Close()
+	rdb := newTestClient(t)
 
 	ctx := context.Background()
 

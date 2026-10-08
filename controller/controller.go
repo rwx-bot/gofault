@@ -60,6 +60,7 @@ type Response struct {
 
 // OK sends a 200 JSON response.
 func OK(w http.ResponseWriter, data any) error {
+	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(Response{Code: 0, Message: "success", Data: data})
 }
 

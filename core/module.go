@@ -25,6 +25,16 @@ func NewCtx(w http.ResponseWriter, r *http.Request) *Ctx {
 	return &Ctx{Request: r, Response: w, Params: make(map[string]string), StatusCode: http.StatusOK, Locals: make(map[string]any)}
 }
 
+// SetLocal stores a value in Locals, creating the map when the Ctx was built
+// without NewCtx. Middleware should use this instead of assigning into Locals
+// directly, so a minimally-constructed Ctx cannot panic on a nil map.
+func (c *Ctx) SetLocal(key string, value any) {
+	if c.Locals == nil {
+		c.Locals = make(map[string]any)
+	}
+	c.Locals[key] = value
+}
+
 // GetVersion returns the API version extracted by versioning middleware, or 0 if not set.
 func (c *Ctx) GetVersion() int {
 	if v, ok := c.Locals["version"].(int); ok {

@@ -182,8 +182,8 @@ func WebSocketHijackMiddleware(config WebSocketConfig) core.MiddlewareFunc {
 			return err
 		}
 
-		ctx.Locals["ws_conn"] = conn
-		ctx.Locals["ws_upgrader"] = &upgrader
+		ctx.SetLocal("ws_conn", conn)
+		ctx.SetLocal("ws_upgrader", &upgrader)
 
 		return next(ctx)
 	}

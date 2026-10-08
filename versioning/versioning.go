@@ -144,8 +144,8 @@ func Middleware(config Config) core.MiddlewareFunc {
 			}
 		}
 
-		ctx.Locals["version"] = version
-		ctx.Locals["version_status"] = status
+		ctx.SetLocal("version", version)
+		ctx.SetLocal("version_status", status)
 
 		return next(ctx)
 	}
@@ -161,8 +161,8 @@ type VersionInfo struct {
 // DefaultVersionSet creates a version set with the given versions.
 func DefaultVersionSet(versions []VersionInfo) *VersionSet {
 	vs := &VersionSet{
-		versions:   make(map[int]VersionInfo),
-		byStatus:   make(map[VersionStatus][]int),
+		versions: make(map[int]VersionInfo),
+		byStatus: make(map[VersionStatus][]int),
 	}
 	for _, v := range versions {
 		vs.versions[v.Version] = v
@@ -266,8 +266,8 @@ func VersionHandler(handler core.Handler, vs *VersionSet) core.Handler {
 			return handler(ctx)
 		}
 		// Inject version info into context
-		ctx.Locals["version_info"] = info
-		ctx.Locals["version_status"] = info.Status
+		ctx.SetLocal("version_info", info)
+		ctx.SetLocal("version_status", info.Status)
 
 		// Add deprecation header if needed
 		if info.Status == VersionStatusDeprecated {

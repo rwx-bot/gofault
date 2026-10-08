@@ -33,13 +33,13 @@ type UploadConfig struct {
 // DefaultUploadConfig returns a default upload configuration.
 func DefaultUploadConfig() UploadConfig {
 	return UploadConfig{
-		Enabled:         true,
-		MaxSize:         10 * 1024 * 1024, // 10MB
-		AllowedTypes:    nil,
+		Enabled:           true,
+		MaxSize:           10 * 1024 * 1024, // 10MB
+		AllowedTypes:      nil,
 		AllowedExtensions: nil,
-		Storage:         nil, // must be set by caller
-		FieldName:       "file",
-		SkipFunc:        nil,
+		Storage:           nil, // must be set by caller
+		FieldName:         "file",
+		SkipFunc:          nil,
 	}
 }
 
@@ -186,7 +186,7 @@ func UploadMiddleware(config UploadConfig) core.MiddlewareFunc {
 			})
 		}
 
-		ctx.Locals["upload_files"] = uploaded
+		ctx.SetLocal("upload_files", uploaded)
 		return next(ctx)
 	}
 }

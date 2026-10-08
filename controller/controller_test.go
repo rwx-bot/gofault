@@ -34,6 +34,13 @@ func TestOK(t *testing.T) {
 	if r.Code != 0 || r.Message != "success" {
 		t.Fatalf("unexpected response: %+v", r)
 	}
+	// Assert on Result() (the header snapshot taken at WriteHeader) rather than
+	// Header(): a recorder keeps accepting Set calls after the status line is
+	// written, whereas a real server commits the headers and would serve this
+	// body as text/plain.
+	if ct := w.Result().Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %s, want application/json", ct)
+	}
 }
 
 func TestParamExtraction(t *testing.T) {

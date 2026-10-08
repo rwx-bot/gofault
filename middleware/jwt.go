@@ -68,8 +68,22 @@ func JWTAuth(cfg JWTConfig) core.MiddlewareFunc {
 			return exception.Unauthorized("token expired")
 		}
 
+		// Hand the verified claims to downstream handlers. Without this the
+		// middleware authenticates the caller but nothing downstream can read
+		// who the caller is.
+		ctx.SetLocal("claims", claims)
+
 		return next(ctx)
 	}
+}
+
+// GetClaims returns the claims verified by JWTAuth, or nil when the route is not
+// protected by it.
+func GetClaims(ctx *core.Ctx) *Claims {
+	if claims, ok := ctx.Locals["claims"].(*Claims); ok {
+		return claims
+	}
+	return nil
 }
 
 // extractToken extracts JWT from request.

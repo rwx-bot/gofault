@@ -10,13 +10,30 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # The redis package holds integration tests that assert against real server
+    # semantics (Lua scripts, key expiry). Without a server they skip, so CI
+    # provisions one in order to actually exercise them.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      GOFAULT_REDIS_ADDR: 127.0.0.1:6379
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25'
           cache: true
 
       - name: Run tests
@@ -37,7 +54,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25'
           cache: true
 
       - name: Install golangci-lint
@@ -59,7 +76,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25'
           cache: true
 
       - name: Build

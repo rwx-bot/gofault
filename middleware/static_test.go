@@ -468,8 +468,8 @@ func TestParseInt64(t *testing.T) {
 
 func TestDetectContentType(t *testing.T) {
 	tests := []struct {
-		ext     string
-		mime    string
+		ext  string
+		mime string
 	}{
 		{".html", "text/html; charset=utf-8"},
 		{".css", "text/css; charset=utf-8"},
