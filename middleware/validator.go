@@ -26,14 +26,6 @@ func (ve ValidationErrors) Error() string {
 	return strings.Join(msgs, "; ")
 }
 
-// ValidatorConfig holds configuration for the validator middleware.
-type ValidatorConfig struct {
-	// BindTarget is the target struct type to bind and validate.
-	BindTarget interface{}
-	// SkipMissing causes missing query/path params to be skipped instead of causing errors.
-	SkipMissing bool
-}
-
 // ValidationRule defines a single validation rule.
 type ValidationRule interface {
 	Validate(field string, value interface{}) *ValidationError
@@ -152,6 +144,10 @@ func (r *Max) Validate(field string, value interface{}) *ValidationError {
 type Rules map[string][]ValidationRule
 
 // ValidateRequest validates the request against defined rules.
+//
+// Rules are supplied per call rather than per route; there is no validator
+// middleware. A previous ValidatorConfig (with BindTarget and SkipMissing)
+// promised one but was never read by any code, so setting it did nothing.
 func ValidateRequest(ctx *core.Ctx, rules Rules) error {
 	var errs ValidationErrors
 
