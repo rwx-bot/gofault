@@ -215,3 +215,59 @@ func TestHandler_Signature(t *testing.T) {
 		t.Errorf("expected 201, got %d", ctx.StatusCode)
 	}
 }
+
+func TestCtx_SetLocal(t *testing.T) {
+	ctx := NewCtx(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+
+	ctx.SetLocal("user", "alice")
+	if ctx.Locals["user"] != "alice" {
+		t.Errorf("Locals[user] = %v, want alice", ctx.Locals["user"])
+	}
+
+	// A Ctx built without NewCtx has a nil Locals map; SetLocal must not panic.
+	bare := &Ctx{}
+	bare.SetLocal("k", 1)
+	if bare.Locals["k"] != 1 {
+		t.Errorf("expected SetLocal to create the map, got %v", bare.Locals)
+	}
+}
+
+func TestCtx_GetVersion(t *testing.T) {
+	ctx := NewCtx(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+
+	if got := ctx.GetVersion(); got != 0 {
+		t.Errorf("GetVersion() with no version = %d, want 0", got)
+	}
+	ctx.SetLocal("version", 2)
+	if got := ctx.GetVersion(); got != 2 {
+		t.Errorf("GetVersion() = %d, want 2", got)
+	}
+
+	// A value of the wrong type must fall back to the zero value, not panic.
+	ctx.SetLocal("version", "two")
+	if got := ctx.GetVersion(); got != 0 {
+		t.Errorf("GetVersion() with wrong type = %d, want 0", got)
+	}
+}
+
+func TestCtx_GetVersionStatus(t *testing.T) {
+	ctx := NewCtx(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+
+	if got := ctx.GetVersionStatus(); got != 0 {
+		t.Errorf("GetVersionStatus() with no status = %d, want 0", got)
+	}
+	ctx.SetLocal("version_status", 1)
+	if got := ctx.GetVersionStatus(); got != 1 {
+		t.Errorf("GetVersionStatus() = %d, want 1", got)
+	}
+}
+
+func TestCtx_RespHeader(t *testing.T) {
+	w := httptest.NewRecorder()
+	ctx := NewCtx(w, httptest.NewRequest("GET", "/", nil))
+
+	ctx.RespHeader().Set("X-Test", "v")
+	if got := w.Header().Get("X-Test"); got != "v" {
+		t.Errorf("RespHeader did not reach the response writer, got %q", got)
+	}
+}
