@@ -194,16 +194,23 @@ func (c *container) resolveRequestScoped(ctx context.Context, e *entry, t reflec
 }
 
 // resolveSingleton returns the singleton instance, creating it lazily if needed.
+//
+// e.inst is written under c.mu, so it must also be read under c.mu. Reading it
+// lock-free was a data race: concurrent resolves of the same not-yet-created
+// singleton raced on the field, and the fast path could observe a partially
+// written interface value.
 func (c *container) resolveSingleton(e *entry, t reflect.Type) (any, error) {
-	// Fast path: already instantiated (no lock needed for read of e.inst).
+	// Fast path: already instantiated.
+	c.mu.RLock()
 	inst := e.inst
+	c.mu.RUnlock()
 	if inst != nil {
 		return inst, nil
 	}
 
-	// Slow path: lazily create the singleton instance.
-	// We need a write lock but must avoid deadlock with nested callCtor calls.
-	// Solution: create instance outside the lock, then atomically swap.
+	// Slow path. Build the instance outside the lock so nested callCtor calls
+	// can take the lock themselves without deadlocking, then publish it under
+	// the lock with a double-check.
 	created, err := c.callCtor(e.ctor)
 	if err != nil {
 		return nil, err
@@ -211,8 +218,8 @@ func (c *container) resolveSingleton(e *entry, t reflect.Type) (any, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Double-check: another goroutine may have created it.
 	if e.inst != nil {
+		// Another goroutine created it first; discard ours.
 		return e.inst, nil
 	}
 	e.inst = created
@@ -246,25 +253,9 @@ func (c *container) resolveType(t reflect.Type) (any, error) {
 	e, isSingleton := c.singletons[t]
 	c.mu.RUnlock()
 	if isSingleton {
-		inst := e.inst
-		if inst != nil {
-			return inst, nil
-		}
-		// Not yet instantiated - need to create it but avoid deadlock.
-		// Create outside the lock, then atomically set via the singleton path.
-		created, err := c.callCtor(e.ctor)
-		if err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-		if e.inst != nil {
-			// Another goroutine beat us to it.
-			c.mu.Unlock()
-			return e.inst, nil
-		}
-		e.inst = created
-		c.mu.Unlock()
-		return created, nil
+		// Same path as ResolveFromCtx, so both entry points share one
+		// implementation and one locking discipline.
+		return c.resolveSingleton(e, t)
 	}
 
 	// Check transients.

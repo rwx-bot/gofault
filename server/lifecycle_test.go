@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -244,3 +245,61 @@ func TestListen(t *testing.T) {
 }
 
 var _ = context.Background
+
+// The happy path of StartWithGracefulShutdown: it must serve, then return when
+// the process is asked to stop. Only the bind-failure path was covered, which
+// left the signal-driven branch untested.
+func TestStartWithGracefulShutdown_ServesThenStopsOnSignal(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("pong"))
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	srv := NewWithConfig(mux, addr)
+
+	done := make(chan error, 1)
+	go func() { done <- srv.StartWithGracefulShutdown(3 * time.Second) }()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	var body string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get("http://" + addr + "/ping")
+		if err != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		body = string(b)
+		break
+	}
+	if body != "pong" {
+		t.Fatalf("body = %q, want pong", body)
+	}
+
+	// Deliver the signal the function waits on.
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Skipf("cannot signal self: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("StartWithGracefulShutdown = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("did not return after SIGTERM")
+	}
+
+	if !srv.IsStopped() {
+		t.Error("server should report stopped after a signal-driven shutdown")
+	}
+}
