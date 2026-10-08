@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofault/gofault/core"
@@ -131,7 +132,37 @@ func MetricsMiddleware(config MetricsConfig) (core.MiddlewareFunc, *prometheus.R
 }
 
 // normalizePath returns a label-safe path.
-// Dynamic segments like /user/123 are normalized to /user/:id.
+// Dynamic segments like /user/123 are normalized to /user/:id to prevent
+// Prometheus cardinality explosion from unbounded label values.
 func normalizePath(path string) string {
-	return path
+	if path == "" {
+		return "/"
+	}
+
+	// Split into segments and replace numeric ones with a placeholder.
+	segments := strings.Split(path, "/")
+	for i, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		// Replace purely numeric segments (IDs) with a placeholder.
+		if isNumeric(seg) {
+			segments[i] = ":id"
+		}
+	}
+
+	return strings.Join(segments, "/")
+}
+
+// isNumeric reports whether s consists only of digits.
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

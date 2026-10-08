@@ -1,6 +1,10 @@
+// Package middleware provides common HTTP middleware for gofault.
 package middleware
 
 import (
+	"bytes"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/gofault/gofault/core"
@@ -63,8 +67,17 @@ func RequestLoggerMiddleware(config RequestLoggerConfig) core.MiddlewareFunc {
 			logData["response_body"] = "response captured"
 		}
 
-		// In a real implementation, this would use the app's logger
-		// For now, we just avoid blocking
+		// Emit the log entry. Previously this built logData and discarded it,
+		// so the middleware produced no output at all.
+		attrs := make([]any, 0, len(logData)*2)
+		for k, v := range logData {
+			attrs = append(attrs, k, v)
+		}
+		if err != nil {
+			slog.Default().Error("request failed", attrs...)
+		} else {
+			slog.Default().Info("request", attrs...)
+		}
 
 		return err
 	}
@@ -81,7 +94,21 @@ func formatHeaders(headers map[string][]string) map[string]string {
 	return result
 }
 
-// readRequestBody reads the request body (simplified - in production use ctx.Request.Body)
+// readRequestBody reads the request body and restores it so downstream
+// handlers can read it again. Returns an empty string when LogBody is off or
+// the body is empty.
 func readRequestBody(ctx *core.Ctx) string {
-	return ""
+	if ctx.Request.Body == nil {
+		return ""
+	}
+
+	body, err := io.ReadAll(ctx.Request.Body)
+	if err != nil {
+		return ""
+	}
+
+	// Restore the body for downstream handlers.
+	ctx.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	return string(body)
 }

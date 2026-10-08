@@ -103,29 +103,41 @@ func WebSocketMiddleware(config WebSocketConfig, handler WebSocketHandler) core.
 		}
 		defer conn.Close()
 
-		// Set deadlines
-		conn.SetReadDeadline(time.Now().Add(config.ReadTimeout))
-		conn.SetWriteDeadline(time.Now().Add(config.WriteTimeout))
+		// Set deadlines. A zero timeout means "no deadline" for the connection,
+		// not "expire immediately".
+		if config.ReadTimeout > 0 {
+			conn.SetReadDeadline(time.Now().Add(config.ReadTimeout))
+		}
+		if config.WriteTimeout > 0 {
+			conn.SetWriteDeadline(time.Now().Add(config.WriteTimeout))
+		}
 
-		// Start ping handler
+		// Start ping handler. A zero or negative interval disables pinging;
+		// time.NewTicker panics on a non-positive duration.
 		stopCh := make(chan struct{})
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ticker := time.NewTicker(config.PingInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(config.WriteTimeout)); err != nil {
+		if config.PingInterval > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ticker := time.NewTicker(config.PingInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						writeDeadline := time.Time{}
+						if config.WriteTimeout > 0 {
+							writeDeadline = time.Now().Add(config.WriteTimeout)
+						}
+						if err := conn.WriteControl(websocket.PingMessage, nil, writeDeadline); err != nil {
+							return
+						}
+					case <-stopCh:
 						return
 					}
-				case <-stopCh:
-					return
 				}
-			}
-		}()
+			}()
+		}
 
 		// Handle connect callback
 		if err := handler.HandleConnect(ctx, conn); err != nil {
@@ -142,7 +154,9 @@ func WebSocketMiddleware(config WebSocketConfig, handler WebSocketHandler) core.
 				readErr = err
 				break
 			}
-			conn.SetReadDeadline(time.Now().Add(config.ReadTimeout))
+			if config.ReadTimeout > 0 {
+				conn.SetReadDeadline(time.Now().Add(config.ReadTimeout))
+			}
 			if err := handler.HandleMessage(ctx, conn, msgType, data); err != nil {
 				readErr = err
 				break

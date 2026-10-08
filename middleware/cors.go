@@ -2,6 +2,7 @@
 package middleware
 
 import (
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -42,10 +43,15 @@ func CORS(cfg CORSConfig) core.MiddlewareFunc {
 				allowedOrigin = o
 				break
 			}
-			// Support wildcard subdomain matching
-			if strings.HasPrefix(o, "*.") && strings.HasSuffix(origin, strings.TrimPrefix(o, "*.")) {
-				allowedOrigin = origin
-				break
+			// Support wildcard subdomain matching: *.example.com matches
+			// sub.example.com but NOT notexample.com or evil-example.com.
+			// The suffix must be preceded by a dot.
+			if strings.HasPrefix(o, "*.") {
+				domain := strings.TrimPrefix(o, "*.")
+				if strings.HasSuffix(origin, "."+domain) {
+					allowedOrigin = origin
+					break
+				}
 			}
 		}
 
@@ -70,7 +76,8 @@ func CORS(cfg CORSConfig) core.MiddlewareFunc {
 			if len(cfg.AllowHeaders) > 0 {
 				ctx.Response.Header().Set("Access-Control-Allow-Headers", strings.Join(cfg.AllowHeaders, ", "))
 			}
-			ctx.StatusCode = 204
+			ctx.StatusCode = http.StatusNoContent
+			ctx.Response.WriteHeader(http.StatusNoContent)
 			return nil
 		}
 

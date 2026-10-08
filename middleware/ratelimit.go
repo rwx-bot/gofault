@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -19,15 +20,22 @@ type RateLimiterConfig struct {
 }
 
 // DefaultKeyFunc returns the client IP as the rate limit key.
+// X-Forwarded-For may contain a comma-separated proxy chain; the first
+// element is the client's real address. Using the whole header would let a
+// client rotate the chain to get a fresh bucket per request and bypass the
+// limiter.
 func DefaultKeyFunc(ctx *core.Ctx) string {
 	ip := ctx.Request.Header.Get("X-Forwarded-For")
-	if ip == "" {
-		ip = ctx.Request.Header.Get("X-Real-IP")
+	if ip != "" {
+		if i := strings.IndexByte(ip, ','); i >= 0 {
+			ip = strings.TrimSpace(ip[:i])
+		}
+		return ip
 	}
-	if ip == "" {
-		ip = ctx.Request.RemoteAddr
+	if ip = ctx.Request.Header.Get("X-Real-IP"); ip != "" {
+		return ip
 	}
-	return ip
+	return ctx.Request.RemoteAddr
 }
 
 // RateLimiter implements a token bucket rate limiter.

@@ -121,9 +121,18 @@ func SessionMiddleware(store *SessionStore) core.MiddlewareFunc {
 			}
 		}
 
+		// Publish the session so downstream handlers can read it via GetSession.
+		ctx.SetLocal("session", session)
+
 		err = next(ctx)
 
-		// Set session cookie
+		// Only set the cookie when the request succeeded. On error the response
+		// may already carry an error body, and issuing a fresh session would
+		// suggest the request was accepted.
+		if err != nil {
+			return err
+		}
+
 		httpCookie := &http.Cookie{
 			Name:     store.config.Name,
 			Value:    session.ID,
@@ -134,9 +143,11 @@ func SessionMiddleware(store *SessionStore) core.MiddlewareFunc {
 			HttpOnly: store.config.HTTPOnly,
 		}
 
-		ctx.Response.Header().Set("Set-Cookie", formatCookie(httpCookie))
+		// Add rather than Set: a handler may already have set its own cookies,
+		// and Set would replace them.
+		ctx.Response.Header().Add("Set-Cookie", formatCookie(httpCookie))
 
-		return err
+		return nil
 	}
 }
 
@@ -170,18 +181,16 @@ func generateSessionID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// Session type for context
-type sessionKey struct{}
-
-// GetSession retrieves session from context.
+// GetSession retrieves the session attached to the request by
+// SessionMiddleware. It returns nil when the route is not protected by it.
 func GetSession(ctx *core.Ctx) *Session {
-	session, _ := getSessionFromContext(ctx.Request.Context())
-	return session
-}
-
-// getSessionFromContext retrieves session from context.
-func getSessionFromContext(ctx core.Context) (*Session, bool) {
-	return nil, false
+	if ctx == nil || ctx.Locals == nil {
+		return nil
+	}
+	if s, ok := ctx.Locals["session"].(*Session); ok {
+		return s
+	}
+	return nil
 }
 
 // SetValue sets a value in the session.
