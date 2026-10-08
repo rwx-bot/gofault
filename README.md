@@ -638,15 +638,36 @@ mod.RegisterMiddleware(middleware.CORS(cfg))
 
 ### JWT authentication
 
-`JWTAuth` verifies the bearer token (or the configured query parameter) and
-rejects the request when it is missing, malformed or expired:
+`JWTAuth` verifies the bearer token and rejects the request when it is missing,
+malformed or expired:
 
 ```go
 cfg := middleware.DefaultJWTConfig([]byte(os.Getenv("JWT_SECRET")))
-cfg.TokenName = "access_token"
 
 mod.RegisterMiddleware(middleware.JWTAuth(cfg))
 ```
+
+Tokens are read from the `Authorization: Bearer` header only. Reading them from
+the query string is opt-in, because a token in a URL leaks into access logs,
+`Referer` headers and browser history:
+
+```go
+cfg.TokenName = "access_token"
+cfg.AllowQueryToken = true // only for clients that cannot set headers
+```
+
+By default a token without an `exp` claim is rejected, so a leaked token cannot
+stay valid forever. Both guards can be relaxed explicitly if a foreign issuer
+requires it:
+
+```go
+cfg.RequireExpiry = false
+```
+
+`JWTAuth` returns `nil` when the secret is empty or the algorithm is not
+HS256, so a misconfigured route fails closed at wiring time rather than
+rejecting every request at runtime. Check for `nil` if you build middleware
+dynamically.
 
 Verified claims are published on the request, so handlers can see who called:
 
