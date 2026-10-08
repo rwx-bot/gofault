@@ -39,6 +39,19 @@ type cacheEntry struct {
 	Expires    time.Time
 }
 
+// CacheBackend is the storage a CacheMiddleware delegates to. It exists so the
+// cache can live outside the process: *InMemoryCache serves a single instance,
+// while a Redis-backed implementation lets several instances share one cache.
+type CacheBackend interface {
+	// Get returns a cached response. ok is false on a miss, and Get must not
+	// treat a miss as an error.
+	Get(key string) (value []byte, statusCode int, headers map[string]string, ok bool)
+	// Set stores a response under key.
+	Set(key string, value []byte, statusCode int, headers map[string]string)
+	// Delete removes a key.
+	Delete(key string)
+}
+
 // InMemoryCache implements a simple in-memory cache with TTL and size limits.
 type InMemoryCache struct {
 	mu      sync.RWMutex
@@ -136,7 +149,7 @@ func (c *InMemoryCache) evictOldest() {
 }
 
 // CacheMiddleware creates a caching middleware.
-func CacheMiddleware(cache *InMemoryCache, config CacheConfig) core.MiddlewareFunc {
+func CacheMiddleware(cache CacheBackend, config CacheConfig) core.MiddlewareFunc {
 	if config.SkipFunc == nil {
 		config.SkipFunc = DefaultCacheConfig().SkipFunc
 	}

@@ -3,10 +3,12 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/gofault/gofault/core"
+	"github.com/gofault/gofault/middleware"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -170,7 +172,8 @@ func (s *redisShutdown) OnShutdown() error {
 	return s.rdb.Close()
 }
 
-// Cache implements an in-Redis cache backend for middleware/cache.go.
+// Cache is a namespaced Redis key/value store with a default TTL. To serve as
+// the backend for middleware.CacheMiddleware, wrap it with NewHTTPBackend.
 type Cache struct {
 	RDB        *redis.Client
 	KeyPrefix  string
@@ -212,4 +215,67 @@ func (c *Cache) Exists(ctx context.Context, key string) (bool, error) {
 
 func (c *Cache) prefix(key string) string {
 	return c.KeyPrefix + ":" + key
+}
+
+// httpCacheEntry is the payload an HTTPBackend stores: a cached response is
+// the body plus the status and headers needed to replay it.
+type httpCacheEntry struct {
+	Value      []byte            `json:"value"`
+	StatusCode int               `json:"status_code"`
+	Headers    map[string]string `json:"headers"`
+}
+
+// HTTPBackend adapts Cache to middleware.CacheBackend so several application
+// instances can share one cache. It satisfies the interface structurally; the
+// assertion below is a compile-time guard against signature drift.
+type HTTPBackend struct {
+	cache  *Cache
+	ctx    context.Context
+	prefix string
+}
+
+// NewHTTPBackend wraps a Cache so it can be passed to middleware.CacheMiddleware.
+// ctx bounds every operation, since the CacheBackend interface takes no context.
+func NewHTTPBackend(c *Cache, ctx context.Context) *HTTPBackend {
+	return &HTTPBackend{cache: c, ctx: ctx}
+}
+
+var _ middleware.CacheBackend = (*HTTPBackend)(nil)
+
+// Get implements middleware.CacheBackend. A missing key is a miss, not an error;
+// any other Redis failure is also reported as a miss so a cache outage degrades
+// to serving the request rather than failing it.
+func (h *HTTPBackend) Get(key string) ([]byte, int, map[string]string, bool) {
+	raw, err := h.cache.Get(h.ctx, h.prefix+key)
+	if err != nil {
+		return nil, 0, nil, false
+	}
+
+	var entry httpCacheEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		// A value written by an older or unrelated client: treat it as a miss
+		// instead of replaying garbage.
+		return nil, 0, nil, false
+	}
+	return entry.Value, entry.StatusCode, entry.Headers, true
+}
+
+// Set implements middleware.CacheBackend.
+func (h *HTTPBackend) Set(key string, value []byte, statusCode int, headers map[string]string) {
+	payload, err := json.Marshal(httpCacheEntry{
+		Value:      value,
+		StatusCode: statusCode,
+		Headers:    headers,
+	})
+	if err != nil {
+		return
+	}
+	// Ignore the error: failing to populate a cache must not fail the request
+	// that was already served correctly.
+	_ = h.cache.Set(h.ctx, h.prefix+key, string(payload), 0)
+}
+
+// Delete implements middleware.CacheBackend.
+func (h *HTTPBackend) Delete(key string) {
+	_ = h.cache.Delete(h.ctx, h.prefix+key)
 }
