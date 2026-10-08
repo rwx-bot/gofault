@@ -83,21 +83,93 @@ func NewLocalStorage(baseDir string) *LocalStorage {
 	}
 }
 
+// maxFileNameLen bounds the sanitized file name so a crafted upload cannot
+// exceed filesystem name limits.
+const maxFileNameLen = 255
+
+// sanitizeFileName reduces an attacker-controlled upload name to a single safe
+// path element. The client fully controls the multipart filename, so values
+// like "../../etc/cron.d/evil" or "..\\..\\windows\\system32\\cfg" would
+// otherwise escape the storage root. Only the final element is kept, path
+// separators and traversal segments are dropped, and NUL/control characters
+// are rejected outright because they truncate paths in syscalls.
+func sanitizeFileName(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("empty file name")
+	}
+	if strings.ContainsRune(name, 0) {
+		return "", fmt.Errorf("file name contains NUL byte")
+	}
+
+	// Strip any directory component the client may have supplied. Replacing
+	// backslashes first covers Windows-style traversal on every platform.
+	cleaned := strings.ReplaceAll(name, "\\", "/")
+	cleaned = filepath.Base(cleaned)
+	cleaned = strings.TrimSpace(cleaned)
+
+	// filepath.Base already collapses "..", but be explicit: a name that is
+	// still a traversal marker must never reach the filesystem.
+	if cleaned == "." || cleaned == ".." || strings.Contains(cleaned, "/") {
+		return "", fmt.Errorf("invalid file name")
+	}
+
+	// Reject remaining control characters.
+	for _, r := range cleaned {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("file name contains control character")
+		}
+	}
+
+	if len(cleaned) > maxFileNameLen {
+		cleaned = cleaned[:maxFileNameLen]
+	}
+	if cleaned == "" {
+		return "", fmt.Errorf("empty file name")
+	}
+	return cleaned, nil
+}
+
+// resolveUnderRoot joins rel onto base and verifies the result stays inside
+// base. base must be absolute and already cleaned.
+func resolveUnderRoot(base, rel string) (string, error) {
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", fmt.Errorf("resolve base dir: %w", err)
+	}
+	absBase = filepath.Clean(absBase)
+
+	target := filepath.Join(absBase, filepath.Clean("/"+rel))
+	if target != absBase && !strings.HasPrefix(target, absBase+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path escapes storage root")
+	}
+	return target, nil
+}
+
 // Store saves a file to the local filesystem.
 func (s *LocalStorage) Store(file *multipart.FileHeader, dir string) (string, error) {
+	safeName, err := sanitizeFileName(file.Filename)
+	if err != nil {
+		return "", fmt.Errorf("sanitize file name: %w", err)
+	}
+
+	// Resolve the destination before touching the filesystem so a traversal
+	// attempt fails without creating any directory.
+	fullDir, err := resolveUnderRoot(s.BaseDir, dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve storage dir: %w", err)
+	}
+	if err := os.MkdirAll(fullDir, s.Perm); err != nil {
+		return "", fmt.Errorf("create directory: %w", err)
+	}
+
+	storedPath := filepath.Join(fullDir, safeName)
+
 	src, err := file.Open()
 	if err != nil {
 		return "", fmt.Errorf("open uploaded file: %w", err)
 	}
 	defer src.Close()
 
-	// Ensure parent directory exists
-	fullDir := filepath.Join(s.BaseDir, dir)
-	if err := os.MkdirAll(fullDir, s.Perm); err != nil {
-		return "", fmt.Errorf("create directory: %w", err)
-	}
-
-	storedPath := filepath.Join(fullDir, file.Filename)
 	dst, err := os.OpenFile(storedPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, s.Perm)
 	if err != nil {
 		return "", fmt.Errorf("create file: %w", err)
@@ -108,12 +180,15 @@ func (s *LocalStorage) Store(file *multipart.FileHeader, dir string) (string, er
 		return "", fmt.Errorf("copy file: %w", err)
 	}
 
-	return filepath.Join(dir, file.Filename), nil
+	return filepath.ToSlash(filepath.Join(dir, safeName)), nil
 }
 
 // Delete removes a file from the local filesystem.
 func (s *LocalStorage) Delete(path string) error {
-	fullPath := filepath.Join(s.BaseDir, path)
+	fullPath, err := resolveUnderRoot(s.BaseDir, path)
+	if err != nil {
+		return fmt.Errorf("resolve delete path: %w", err)
+	}
 	return os.Remove(fullPath)
 }
 
@@ -165,6 +240,14 @@ func UploadMiddleware(config UploadConfig) core.MiddlewareFunc {
 				return nil
 			}
 
+			// Reject traversal names before they reach any storage backend,
+			// including third-party ones that may not sanitize themselves.
+			safeName, err := sanitizeFileName(f.Filename)
+			if err != nil {
+				ctx.Response.WriteHeader(http.StatusBadRequest)
+				return nil
+			}
+
 			if !allowedFile(f, config.AllowedTypes, config.AllowedExtensions) {
 				ctx.Response.WriteHeader(http.StatusUnsupportedMediaType)
 				return nil
@@ -175,10 +258,10 @@ func UploadMiddleware(config UploadConfig) core.MiddlewareFunc {
 				return fmt.Errorf("store file: %w", err)
 			}
 
-			ext := filepath.Ext(f.Filename)
+			ext := filepath.Ext(safeName)
 			uploaded = append(uploaded, FileInfo{
 				FieldName:   fieldName,
-				FileName:    f.Filename,
+				FileName:    safeName,
 				Size:        f.Size,
 				ContentType: f.Header.Get("Content-Type"),
 				StoredPath:  storedPath,

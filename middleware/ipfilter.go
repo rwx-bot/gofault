@@ -41,18 +41,28 @@ func IPFilterMiddleware(config IPFilterConfig) core.MiddlewareFunc {
 
 	return func(ctx *core.Ctx, next core.Handler) error {
 		clientIP := getClientIP(ctx)
+		blocked := isIPBlocked(clientIP, blockNets)
+		allowed := len(allowNets) == 0 || isIPAllowed(clientIP, allowNets)
 
-		// Check block list first
-		if isIPBlocked(clientIP, blockNets) {
-			ctx.Response.WriteHeader(http.StatusForbidden)
-			ctx.Response.Write([]byte(`{"status":"error","message":"IP blocked"}`))
-			return nil
+		// Mode decides which list wins when an IP matches both. It was
+		// documented but never consulted, so Mode="allow" silently behaved
+		// like "block".
+		var deny bool
+		switch config.Mode {
+		case "allow":
+			deny = !allowed
+		default: // "block" and any unrecognised value
+			deny = blocked || !allowed
 		}
 
-		// If allow list is not empty, check it
-		if len(allowNets) > 0 && !isIPAllowed(clientIP, allowNets) {
+		if deny {
+			msg := "IP blocked"
+			if !blocked {
+				msg = "IP not allowed"
+			}
+			ctx.Response.Header().Set("Content-Type", "application/json")
 			ctx.Response.WriteHeader(http.StatusForbidden)
-			ctx.Response.Write([]byte(`{"status":"error","message":"IP not allowed"}`))
+			ctx.Response.Write([]byte(`{"status":"error","message":"` + msg + `"}`))
 			return nil
 		}
 

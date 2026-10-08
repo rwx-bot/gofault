@@ -64,11 +64,39 @@ func StaticMiddleware(config StaticConfig) core.MiddlewareFunc {
 		// Resolve file path
 		filePath := filepath.Join(config.Dir, filepath.Clean(reqPath))
 
-		// Security: ensure file path is within root directory
-		absDir, _ := filepath.Abs(config.Dir)
-		absPath, err := filepath.Abs(filePath)
-		if err != nil || !strings.HasPrefix(absPath, absDir) {
+		// Security: ensure file path is within root directory. A plain
+		// HasPrefix check would also accept sibling directories that merely
+		// share the root's name (root /var/www would match /var/www-secret),
+		// so the root is compared with a trailing separator.
+		absDir, err := filepath.Abs(config.Dir)
+		if err != nil {
 			return next(ctx)
+		}
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			return next(ctx)
+		}
+		if !isWithinRoot(absDir, absPath) {
+			return next(ctx)
+		}
+
+		// A lexical check cannot see through a symlink: <root>/link -> /etc
+		// passes isWithinRoot yet resolves outside the root. os.Stat below
+		// follows links, so the real target has to be validated too unless
+		// following links was explicitly requested.
+		if !config.FollowSymLinks {
+			resolved, err := filepath.EvalSymlinks(absPath)
+			if err != nil {
+				// Broken or unresolvable link: nothing to serve.
+				return next(ctx)
+			}
+			resolvedDir, err := filepath.EvalSymlinks(absDir)
+			if err != nil {
+				resolvedDir = absDir
+			}
+			if !isWithinRoot(resolvedDir, resolved) {
+				return next(ctx)
+			}
 		}
 
 		// Check if path is a directory
@@ -108,6 +136,21 @@ func StaticMiddleware(config StaticConfig) core.MiddlewareFunc {
 		// Serve the file
 		return serveFile(ctx, absPath, info, config)
 	}
+}
+
+// isWithinRoot reports whether target is root itself or lives underneath it.
+// Both paths must be absolute and already cleaned. The separator is appended
+// to root so that a sibling directory sharing the root's name prefix is
+// rejected rather than served.
+func isWithinRoot(root, target string) bool {
+	if root == target {
+		return true
+	}
+	withSep := root
+	if !strings.HasSuffix(withSep, string(os.PathSeparator)) {
+		withSep += string(os.PathSeparator)
+	}
+	return strings.HasPrefix(target, withSep)
 }
 
 // serveFile writes the file to the response.
