@@ -182,6 +182,11 @@ func CacheMiddleware(cache CacheBackend, config CacheConfig) core.MiddlewareFunc
 			body:           []byte{},
 		}
 		ctx.Response = rec
+		// Restore the real writer before returning, so anything writing to the
+		// response after this middleware returns (the router's exception filter,
+		// for one) is not captured into this handler instead of reaching the
+		// client.
+		defer func() { ctx.Response = rec.ResponseWriter }()
 
 		// Call next handler
 		err := next(ctx)

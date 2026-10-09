@@ -101,15 +101,20 @@ func CompressionMiddleware(config CompressionConfig) core.MiddlewareFunc {
 		real := ctx.Response
 		capture := newCompressCapture(real)
 		ctx.Response = capture
+		// Restore the real writer before returning. The router hands the same
+		// *Ctx to the exception filter after this middleware returns, so leaving
+		// the buffer installed would send the error response into a buffer
+		// nobody reads and the client would get 200 with an empty body.
+		defer func() { ctx.Response = real }()
 
 		err := next(ctx)
 
-		// When the handler failed, pass its output through untouched. The
-		// exception filter still has to write an error response, and having
-		// already committed a status line here would make the filter's write
-		// a no-op, so the client would receive a 2xx for a failed request.
+		// When the handler failed, discard the captured output and return the
+		// error untouched. Writing it out here would commit a 2xx status line
+		// (the handler never wrote one, so the capture holds the 200 default),
+		// which turns the exception filter's error response into a no-op and
+		// leaves the client with a successful-looking empty response.
 		if err != nil {
-			capture.flushTo(real)
 			return err
 		}
 
