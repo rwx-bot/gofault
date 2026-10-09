@@ -324,6 +324,26 @@
 
 ## [v3.4.1]
 
+### Fixed
+- A disabled middleware no longer panics every request. Every constructor in the
+  middleware package returns nil when its config is disabled, and the documented
+  usage registers whatever the constructor returns, so a nil landed in the chain
+  and `runChain` called it. Nil entries are now dropped in
+  Module.RegisterMiddleware, Router.Middleware and Router.Handle. This was
+  reachable before v3.4.1 and was made likely by the JWT change below
+- JWTAuth returns a middleware that rejects requests with a diagnostic instead
+  of nil for an unusable config. MustJWTAuth is available for callers who prefer
+  to fail fast at setup
+
+### Compatibility
+- Migration paths for the v3.4.1 breaking changes:
+  - LegacyJWTConfig(secret) restores the previous token handling (query-string
+    tokens allowed, tokens without an expiry accepted). Both weaken security
+  - JWTAuth no longer returns nil, so pre-v3.4.1 code that registered the result
+    unconditionally works again
+  - ValidatorConfig was removed because it had no effect; there is no
+    replacement, use ValidateRequest
+
 ### Security
 - Static file serving: reject paths outside the root. The containment check
   compared `HasPrefix(absPath, absDir)`, which also accepted sibling
