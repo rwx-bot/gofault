@@ -489,9 +489,13 @@ it, so `internal/deadfield` now fails the build on both this and the next class.
 
 ### Test results
 
-Statement coverage 50.0% -> 86.9%. `controller` 31.6% -> 100%, `core` 58.3%
+Statement coverage 50.0% -> 87.1%. `controller` 31.6% -> 100%, `core` 58.3%
 -> 100%, `exception` 77.1% -> 98.2%, `redis` 78.8% -> 88.5%, `grpc` 81.6%
--> 88.3%, `gorm` 74.1% -> 83.3%, `server` 56.0% -> 90.0%.
+-> 91.3%, `gorm` 74.1% -> 83.3%, `server` 56.0% -> 90.0%.
+
+gRPC additionally gained end-to-end tests over bufconn with a real client;
+RegisterService, the entry point for using the server at all, had no coverage
+and the test named after it never called it.
 
 Every fix has a test that fails when the fix is reverted. Notable additions:
 randomised coverage of the topological sort over 200 generated dependency
