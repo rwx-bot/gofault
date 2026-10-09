@@ -335,6 +335,16 @@
   of nil for an unusable config. MustJWTAuth is available for callers who prefer
   to fail fast at setup
 
+### Fixed
+- RateLimiter leaked a goroutine per instance for the life of the process. Its
+  cleanup loop had no exit condition and there was no way to stop it, so
+  constructing one limiter per tenant leaked one goroutine each time. Added
+  Close, which is idempotent
+- RateLimiter's per-key map grew without bound. Timed-out buckets were only
+  reaped by a 5-minute ticker, so a client rotating keys could add entries far
+  faster than they were dropped. Added MaxKeys (default 10000), evicting the
+  least recently used bucket when the cap is reached
+
 ### Compatibility
 - Migration paths for the v3.4.1 breaking changes:
   - LegacyJWTConfig(secret) restores the previous token handling (query-string

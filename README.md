@@ -715,6 +715,10 @@ limiter := middleware.NewRateLimiter(middleware.RateLimiterConfig{
     KeyFunc:           middleware.DefaultKeyFunc,
 })
 
+// Each limiter starts a goroutine to reap idle buckets. Close it when done, or
+// it runs for the life of the process.
+defer limiter.Close()
+
 mod.RegisterMiddleware(limiter.Middleware())
 ```
 
