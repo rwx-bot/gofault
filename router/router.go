@@ -64,8 +64,31 @@ func (r *Router) getContainer() *ioc.Container {
 }
 
 // Middleware appends global middleware to the router.
+//
+// Nil entries are dropped: a middleware constructor returns nil when disabled,
+// and registering that nil would panic on the first request.
 func (r *Router) Middleware(mw ...core.MiddlewareFunc) {
-	r.middleware = append(r.middleware, mw...)
+	for _, fn := range mw {
+		if fn != nil {
+			r.middleware = append(r.middleware, fn)
+		}
+	}
+}
+
+// compactMiddleware drops nil entries from an arbitrary middleware list.
+func compactMiddleware(mw []core.MiddlewareFunc) []core.MiddlewareFunc {
+	for _, fn := range mw {
+		if fn == nil {
+			out := make([]core.MiddlewareFunc, 0, len(mw))
+			for _, f := range mw {
+				if f != nil {
+					out = append(out, f)
+				}
+			}
+			return out
+		}
+	}
+	return mw
 }
 
 // ExceptionFilter sets the exception filter for the router.
@@ -81,7 +104,7 @@ func (r *Router) Handle(method, path string, handler core.Handler, mw ...core.Mi
 		pattern:    pattern,
 		paramNames: names,
 		handler:    handler,
-		middleware: mw,
+		middleware: compactMiddleware(mw),
 	}
 	r.routes = append(r.routes, entry)
 }

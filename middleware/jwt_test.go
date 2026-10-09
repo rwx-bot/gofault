@@ -3,6 +3,7 @@ package middleware
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -222,12 +223,112 @@ func TestJWTAuth_RejectsAlgNone(t *testing.T) {
 	}
 }
 
-func TestJWTAuth_NilOnUnusableConfig(t *testing.T) {
-	if mw := JWTAuth(JWTConfig{Algorithm: "HS256"}); mw != nil {
-		t.Error("expected nil middleware for empty secret")
+// A misconfigured config must yield a middleware that rejects requests, not nil:
+// the documented usage registers whatever JWTAuth returns, so a nil would panic
+// on the first request.
+func TestJWTAuth_UnusableConfigFailsClosed(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  JWTConfig
+	}{
+		{"empty secret", JWTConfig{Algorithm: "HS256"}},
+		{"unsupported algorithm", JWTConfig{Secret: []byte("s"), Algorithm: "RS256"}},
 	}
-	if mw := JWTAuth(JWTConfig{Secret: []byte("s"), Algorithm: "RS256"}); mw != nil {
-		t.Error("expected nil middleware for unsupported algorithm")
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mw := JWTAuth(c.cfg)
+			if mw == nil {
+				t.Fatal("JWTAuth returned nil, which panics when registered")
+			}
+
+			req := httptest.NewRequest("GET", "/", nil)
+			w := httptest.NewRecorder()
+			ctx := core.NewCtx(w, req)
+
+			reached := false
+			err := mw(ctx, func(ctx *core.Ctx) error {
+				reached = true
+				return nil
+			})
+			if err == nil {
+				t.Fatal("expected an error from a misconfigured middleware")
+			}
+			if reached {
+				t.Error("the handler must not run under a misconfigured middleware")
+			}
+			// The middleware reports the failure; turning it into a response is
+			// the exception filter's job, which is wired at the router.
+			if httpErr, ok := exception.HTTPExceptionOf(err); !ok {
+				t.Errorf("error = %v, want an HTTPException", err)
+			} else if httpErr.GetStatusCode() != http.StatusInternalServerError {
+				t.Errorf("status = %d, want 500", httpErr.GetStatusCode())
+			}
+			if !strings.Contains(err.Error(), "jwt") {
+				t.Errorf("error %q should say what is misconfigured", err)
+			}
+		})
+	}
+}
+
+func TestMustJWTAuth_PanicsOnUnusableConfig(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected MustJWTAuth to panic on an empty secret")
+		}
+	}()
+	_ = MustJWTAuth(JWTConfig{Algorithm: "HS256"})
+}
+
+func TestMustJWTAuth_PanicsOnUnsupportedAlgorithm(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected MustJWTAuth to panic on an unsupported algorithm")
+		}
+	}()
+	_ = MustJWTAuth(JWTConfig{Secret: []byte("s"), Algorithm: "RS256"})
+}
+
+func TestMustJWTAuth_AcceptsValidConfig(t *testing.T) {
+	mw := MustJWTAuth(DefaultJWTConfig([]byte("secret")))
+	if mw == nil {
+		t.Fatal("expected a middleware for a valid config")
+	}
+}
+
+// LegacyJWTConfig must restore the pre-v3.4.1 behaviour for a deliberate
+// migration.
+func TestLegacyJWTConfig(t *testing.T) {
+	cfg := LegacyJWTConfig([]byte("secret"))
+	if !cfg.AllowQueryToken {
+		t.Error("LegacyJWTConfig should accept query-string tokens")
+	}
+	if cfg.RequireExpiry {
+		t.Error("LegacyJWTConfig should accept tokens without an expiry")
+	}
+
+	// A token with no expiry is accepted under the legacy config.
+	mw := JWTAuth(cfg)
+	claims := &Claims{Subject: "u"}
+	token, err := GenerateToken(claims, []byte("secret"), "HS256")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	// Strip the expiry GenerateToken filled in.
+	parts := strings.SplitN(token, ".", 3)
+	payload, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	var m map[string]interface{}
+	json.Unmarshal(payload, &m)
+	delete(m, "exp")
+	newPayload, _ := json.Marshal(m)
+	unsigned := parts[0] + "." + base64.RawURLEncoding.EncodeToString(newPayload)
+	token = unsigned + "." + base64.RawURLEncoding.EncodeToString(sign([]byte(unsigned), []byte("secret")))
+
+	req := httptest.NewRequest("GET", "/?token="+url.QueryEscape(token), nil)
+	w := httptest.NewRecorder()
+	ctx := core.NewCtx(w, req)
+	if err := mw(ctx, func(ctx *core.Ctx) error { return nil }); err != nil {
+		t.Errorf("legacy config should accept a token without exp: %v", err)
 	}
 }
 

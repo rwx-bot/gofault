@@ -66,17 +66,20 @@ func (c *Claims) IsValid() bool {
 }
 
 // JWTAuth creates JWT authentication middleware.
-// It returns nil when the config is unusable, so a misconfigured secret fails
-// closed at wiring time instead of rejecting every request at runtime.
+//
+// A misconfigured secret or an unsupported algorithm yields a middleware that
+// rejects every request with a diagnostic rather than nil. Returning nil was
+// worse than it looks: the documented usage is to register whatever this
+// returns, so callers that never checked for nil put a nil in the chain and
+// panicked on the first request.
 func JWTAuth(cfg JWTConfig) core.MiddlewareFunc {
-	if len(cfg.Secret) == 0 {
-		return nil
-	}
-	if cfg.Algorithm == "" {
+	switch {
+	case len(cfg.Secret) == 0:
+		return misconfiguredJWTMiddleware("jwt: secret is empty")
+	case cfg.Algorithm == "":
 		cfg.Algorithm = jwtAlgHS256
-	}
-	if cfg.Algorithm != jwtAlgHS256 {
-		return nil
+	case cfg.Algorithm != jwtAlgHS256:
+		return misconfiguredJWTMiddleware("jwt: unsupported algorithm " + cfg.Algorithm)
 	}
 	if cfg.TokenName == "" {
 		cfg.TokenName = "token"
@@ -108,6 +111,42 @@ func JWTAuth(cfg JWTConfig) core.MiddlewareFunc {
 
 		return next(ctx)
 	}
+}
+
+// misconfiguredJWTMiddleware fails closed at request time with a message that
+// says what is wrong, instead of at wiring time with a nil the caller may not
+// check.
+func misconfiguredJWTMiddleware(reason string) core.MiddlewareFunc {
+	return func(ctx *core.Ctx, next core.Handler) error {
+		return exception.InternalServerError(reason)
+	}
+}
+
+// MustJWTAuth is JWTAuth for callers that want a wiring-time panic on a
+// misconfigured secret rather than a middleware that rejects every request.
+// Use it during application setup, where failing fast is the point.
+func MustJWTAuth(cfg JWTConfig) core.MiddlewareFunc {
+	if len(cfg.Secret) == 0 {
+		panic("jwt: secret is empty")
+	}
+	if cfg.Algorithm != "" && cfg.Algorithm != jwtAlgHS256 {
+		panic("jwt: unsupported algorithm " + cfg.Algorithm)
+	}
+	return JWTAuth(cfg)
+}
+
+// LegacyJWTConfig returns a config that reproduces the pre-v3.4.1 behaviour:
+// tokens may arrive as a query parameter and one without an expiry is accepted.
+//
+// It exists so an application can be migrated deliberately rather than by
+// accident. Both settings weaken security: a token in a URL leaks into access
+// logs, Referer headers and browser history, and a token without an expiry
+// never stops working.
+func LegacyJWTConfig(secret []byte) JWTConfig {
+	cfg := DefaultJWTConfig(secret)
+	cfg.AllowQueryToken = true
+	cfg.RequireExpiry = false
+	return cfg
 }
 
 // GetClaims returns the claims verified by JWTAuth, or nil when the route is not

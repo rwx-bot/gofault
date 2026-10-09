@@ -133,8 +133,16 @@ func (m *Module) RegisterProviders(providers ...Provider) *Module {
 }
 
 // RegisterMiddleware appends middleware to the module.
+//
+// Nil entries are dropped. Middleware constructors in this framework return nil
+// when disabled, and the documented usage is to register whatever they return,
+// so appending the nil would put a nil in the chain and panic on every request.
 func (m *Module) RegisterMiddleware(mw ...MiddlewareFunc) *Module {
-	m.Middleware = append(m.Middleware, mw...)
+	for _, fn := range mw {
+		if fn != nil {
+			m.Middleware = append(m.Middleware, fn)
+		}
+	}
 	return m
 }
 
