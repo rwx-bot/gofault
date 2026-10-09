@@ -99,7 +99,11 @@ func TestDatabaseConfig_GetDSN(t *testing.T) {
 		Password: "pass",
 	}
 	expected := "user:pass@tcp(localhost:3306)/mydb?charset=utf8mb4"
-	if got := db.GetDSN(); got != expected {
+	got, err := db.GetDSN()
+	if err != nil {
+		t.Fatalf("GetDSN() error = %v", err)
+	}
+	if got != expected {
 		t.Errorf("GetDSN() = %s, want %s", got, expected)
 	}
 }

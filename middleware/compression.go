@@ -1,6 +1,8 @@
+// Package middleware provides common HTTP middleware for gofault.
 package middleware
 
 import (
+	"bytes"
 	"compress/gzip"
 	"net/http"
 	"strings"
@@ -27,22 +29,55 @@ func DefaultCompressionConfig() CompressionConfig {
 	}
 }
 
-// gzipResponseWriter wraps http.ResponseWriter to compress output with gzip.
-type gzipResponseWriter struct {
+// compressCapture buffers a handler's output so it can be compressed before
+// anything reaches the client.
+//
+// The body is accumulated in a bytes.Buffer rather than a []byte. Repeatedly
+// appending to a slice reallocates and copies everything written so far, which
+// made a large response cost O(n^2); bytes.Buffer grows geometrically.
+//
+// The status code is captured the same way: net/http ignores every WriteHeader
+// after the first, so a second call would be silently dropped and the client
+// would see a different status than the handler chose.
+type compressCapture struct {
 	http.ResponseWriter
-	writer *gzip.Writer
+	statusCode  int
+	wroteHeader bool
+	body        bytes.Buffer
 }
 
-func (w *gzipResponseWriter) Write(data []byte) (int, error) {
-	return w.writer.Write(data)
+func newCompressCapture(w http.ResponseWriter) *compressCapture {
+	return &compressCapture{ResponseWriter: w, statusCode: http.StatusOK}
 }
 
-func (w *gzipResponseWriter) WriteHeader(statusCode int) {
-	w.ResponseWriter.WriteHeader(statusCode)
+func (r *compressCapture) WriteHeader(statusCode int) {
+	if r.wroteHeader {
+		return
+	}
+	r.statusCode = statusCode
+	r.wroteHeader = true
 }
 
-// CompressionMiddleware compresses responses using gzip when Accept-Encoding contains "gzip".
-// Returns a MiddlewareFunc that wraps the response if the client supports gzip.
+func (r *compressCapture) Write(data []byte) (int, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	// bytes.Buffer.Write never returns an error.
+	_, _ = r.body.Write(data)
+	return len(data), nil
+}
+
+// Flush lets handlers that stream still flush, even though the body is
+// buffered. Without it, http.Flusher is unavailable and streaming handlers
+// either error or silently buffer everything.
+func (r *compressCapture) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// CompressionMiddleware compresses responses using gzip when Accept-Encoding
+// contains "gzip".
 func CompressionMiddleware(config CompressionConfig) core.MiddlewareFunc {
 	if !config.Enabled {
 		return nil
@@ -59,61 +94,102 @@ func CompressionMiddleware(config CompressionConfig) core.MiddlewareFunc {
 	}
 
 	return func(ctx *core.Ctx, next core.Handler) error {
-		encoding := ctx.Request.Header.Get("Accept-Encoding")
-
-		if !strings.Contains(encoding, "gzip") {
+		if !acceptsGzip(ctx.Request.Header.Get("Accept-Encoding")) {
 			return next(ctx)
 		}
 
-		// Capture the response for compression
-		capture := &compressCapture{
-			ResponseWriter: ctx.Response,
-			statusCode:     http.StatusOK,
-			body:           []byte{},
-		}
+		real := ctx.Response
+		capture := newCompressCapture(real)
 		ctx.Response = capture
 
 		err := next(ctx)
 
-		// Only compress if body is large enough
-		if len(capture.body) >= minSize {
-			gz, gzipErr := gzip.NewWriterLevel(capture.ResponseWriter, level)
+		// When the handler failed, pass its output through untouched. The
+		// exception filter still has to write an error response, and having
+		// already committed a status line here would make the filter's write
+		// a no-op, so the client would receive a 2xx for a failed request.
+		if err != nil {
+			capture.flushTo(real)
+			return err
+		}
+
+		// A body is meaningless for these statuses and net/http rejects it, so
+		// drop it rather than letting the handler's Write surface as an error.
+		if !bodyAllowedForStatus(capture.statusCode) {
+			capture.flushTo(real)
+			return nil
+		}
+
+		if capture.body.Len() >= minSize && capture.body.Len() > 0 {
+			gz, gzipErr := gzip.NewWriterLevel(real, level)
 			if gzipErr != nil {
-				// Fallback to uncompressed
-				capture.ResponseWriter.WriteHeader(capture.statusCode)
-				capture.ResponseWriter.Write(capture.body)
+				// Fall back to uncompressed rather than dropping the body.
+				capture.flushTo(real)
 				return err
 			}
 
-			capture.ResponseWriter.Header().Set("Content-Encoding", "gzip")
-			capture.ResponseWriter.Header().Set("Vary", "Accept-Encoding")
-			capture.ResponseWriter.Header().Del("Content-Length")
+			// Content-Length no longer applies once the body is compressed, and
+			// gzip needs the response to be identified per encoding.
+			real.Header().Set("Content-Encoding", "gzip")
+			real.Header().Add("Vary", "Accept-Encoding")
+			real.Header().Del("Content-Length")
 
-			capture.ResponseWriter.WriteHeader(capture.statusCode)
-			gz.Write(capture.body)
-			gz.Close()
-		} else {
-			// Body too small, write uncompressed
-			capture.ResponseWriter.WriteHeader(capture.statusCode)
-			capture.ResponseWriter.Write(capture.body)
+			real.WriteHeader(capture.statusCode)
+			if _, writeErr := gz.Write(capture.body.Bytes()); writeErr != nil {
+				_ = gz.Close()
+				return writeErr
+			}
+			if closeErr := gz.Close(); closeErr != nil {
+				return closeErr
+			}
+			return nil
 		}
 
-		return err
+		capture.flushTo(real)
+		return nil
 	}
 }
 
-// compressCapture captures the response body for potential compression.
-type compressCapture struct {
-	http.ResponseWriter
-	statusCode int
-	body       []byte
+// flushTo writes the captured response to the real writer.
+func (r *compressCapture) flushTo(w http.ResponseWriter) {
+	// Bodies that must not carry content (204, 304, 1xx) are header-only.
+	if bodyAllowedForStatus(r.statusCode) {
+		w.WriteHeader(r.statusCode)
+		if r.body.Len() > 0 {
+			_, _ = w.Write(r.body.Bytes())
+		}
+		return
+	}
+	w.WriteHeader(r.statusCode)
 }
 
-func (r *compressCapture) WriteHeader(statusCode int) {
-	r.statusCode = statusCode
+// bodyAllowedForStatus reports whether a status code permits a body.
+// Writing one for 204 or 304 is a protocol violation and some clients abort on it.
+func bodyAllowedForStatus(status int) bool {
+	switch {
+	case status >= 100 && status <= 199:
+		return false
+	case status == http.StatusNoContent:
+		return false
+	case status == http.StatusNotModified:
+		return false
+	}
+	return true
 }
 
-func (r *compressCapture) Write(data []byte) (int, error) {
-	r.body = append(r.body, data...)
-	return len(data), nil
+// acceptsGzip reports whether the client offered gzip. A bare "gzip" substring
+// match would also accept encodings such as "x-gzip" or "gzip-extra", so the
+// token list is walked instead.
+func acceptsGzip(header string) bool {
+	for _, part := range strings.Split(header, ",") {
+		token := strings.TrimSpace(part)
+		if i := strings.IndexByte(token, ';'); i >= 0 {
+			// Strip ";q=..." parameters.
+			token = strings.TrimSpace(token[:i])
+		}
+		if strings.EqualFold(token, "gzip") {
+			return true
+		}
+	}
+	return false
 }
