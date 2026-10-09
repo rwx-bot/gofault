@@ -664,10 +664,20 @@ requires it:
 cfg.RequireExpiry = false
 ```
 
-`JWTAuth` returns `nil` when the secret is empty or the algorithm is not
-HS256, so a misconfigured route fails closed at wiring time rather than
-rejecting every request at runtime. Check for `nil` if you build middleware
-dynamically.
+A misconfigured secret or an unsupported algorithm yields a middleware that
+rejects every request with a diagnostic. It never returns `nil`, so registering
+the result unconditionally is safe. Use `MustJWTAuth` if you would rather have
+the process fail at startup instead.
+
+Migrating from before v3.4.1? `LegacyJWTConfig` restores the old token
+handling in one line:
+
+```go
+cfg := middleware.LegacyJWTConfig(secret)
+```
+
+It allows query-string tokens and tokens without an expiry. Both weaken
+security, so prefer migrating to the defaults rather than staying on it.
 
 Verified claims are published on the request, so handlers can see who called:
 
