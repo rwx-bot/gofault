@@ -74,7 +74,11 @@ func makeHandler(ctrl core.Controller, route core.Route) core.Handler {
 }
 
 // sortModules topological sorts modules by their Depends declarations.
-// Modules with no dependencies or only resolved dependencies come first.
+//
+// The result is deterministic: modules keep their registration order among
+// themselves, so the same dependency graph always produces the same start
+// order. Iterating a map here leaked Go's randomised iteration into observable
+// behaviour, so modules booted in a different order on every run.
 func (a *App) sortModules() error {
 	// Build dependency graph and check for missing dependencies.
 	for _, m := range a.modules {
@@ -85,17 +89,21 @@ func (a *App) sortModules() error {
 		}
 	}
 
-	// Kahn's algorithm for topological sort.
+	// Kahn's algorithm for topological sort, walking the registration-ordered
+	// slice rather than a map so the output is stable.
 	var sorted []*core.Module
-	resolved := make(map[string]bool)
-	remaining := make(map[string]*core.Module)
+	resolved := make(map[string]bool, len(a.modules))
+	remaining := make(map[string]*core.Module, len(a.modules))
 	for _, m := range a.modules {
 		remaining[m.Name] = m
 	}
 
 	for len(remaining) > 0 {
 		progress := false
-		for name, m := range remaining {
+		for _, m := range a.modules {
+			if resolved[m.Name] {
+				continue
+			}
 			allResolved := true
 			for _, dep := range m.Depends {
 				if !resolved[dep] {
@@ -105,16 +113,19 @@ func (a *App) sortModules() error {
 			}
 			if allResolved {
 				sorted = append(sorted, m)
-				resolved[name] = true
-				delete(remaining, name)
+				resolved[m.Name] = true
+				delete(remaining, m.Name)
 				progress = true
 			}
 		}
 		if !progress && len(remaining) > 0 {
-			// Circular dependency detected.
+			// Circular dependency detected. Report the cycle in registration
+			// order so the message is reproducible too.
 			var cycle []string
-			for name := range remaining {
-				cycle = append(cycle, name)
+			for _, m := range a.modules {
+				if !resolved[m.Name] {
+					cycle = append(cycle, m.Name)
+				}
 			}
 			return fmt.Errorf("circular dependency detected among modules: %v", cycle)
 		}

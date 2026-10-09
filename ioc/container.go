@@ -3,10 +3,16 @@ package ioc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
 )
+
+// ErrDuplicateRegistration is returned when two constructors are registered for
+// the same type in the same scope. Silently replacing the first binding made a
+// later typo look like it had taken effect.
+var ErrDuplicateRegistration = errors.New("duplicate registration")
 
 // contextKey is a custom type to avoid collisions in context.WithValue.
 type contextKey string
@@ -105,16 +111,30 @@ func (c *container) register(ctor any, scope Scope) error {
 		return fmt.Errorf("ctor must return exactly one value, got %d", t.NumOut())
 	}
 	key := t.Out(0)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	var target map[reflect.Type]*entry
 	switch scope {
 	case ScopeSingleton:
-		c.singletons[key] = &entry{ctor: ctor}
+		target = c.singletons
 	case ScopeTransient:
-		c.transients[key] = &entry{ctor: ctor}
+		target = c.transients
 	case ScopeRequest:
-		c.request[key] = &entry{ctor: ctor}
+		target = c.request
+	default:
+		return fmt.Errorf("unknown scope %d", scope)
 	}
+
+	// Registering two constructors for the same type used to silently replace
+	// the first, so a typo in a later Register left the earlier binding in
+	// place with no indication that anything was wrong.
+	if _, dup := target[key]; dup {
+		return fmt.Errorf("%w: %s is already registered", ErrDuplicateRegistration, key)
+	}
+
+	target[key] = &entry{ctor: ctor}
 	return nil
 }
 
@@ -226,6 +246,8 @@ func (c *container) resolveSingleton(e *entry, t reflect.Type) (any, error) {
 	return created, nil
 }
 
+// callCtor invokes a constructor, resolving each argument through the
+// container.
 func (c *container) callCtor(ctor any) (any, error) {
 	fn := reflect.ValueOf(ctor)
 	in := make([]reflect.Value, fn.Type().NumIn())
@@ -238,12 +260,8 @@ func (c *container) callCtor(ctor any) (any, error) {
 		in[i] = reflect.ValueOf(arg)
 	}
 	out := fn.Call(in)
-	if len(out) == 2 && !out[1].IsNil() {
-		return out[0].Interface(), out[1].Interface().(error)
-	}
-	if len(out) == 1 {
-		return out[0].Interface(), nil
-	}
+	// register rejects any constructor that does not return exactly one value,
+	// so there is no error return to inspect here.
 	return out[0].Interface(), nil
 }
 
