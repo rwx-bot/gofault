@@ -8,6 +8,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Core architecture: IoC container and module primitives
 
 ## [v0.5.0]
@@ -20,6 +28,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Middleware chain, lifecycle hooks and exception filtering
 
 ## [v1.0.0]
@@ -32,6 +48,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Complete framework: server, router, controller, provider
 
 ## [v1.1.0]
@@ -44,6 +68,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Configuration layer and HTTP exception mapping
 
 ## [v1.2.0]
@@ -56,6 +88,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Graceful shutdown and example application
 
 ## [v1.3.0]
@@ -68,6 +108,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Route grouping, parameter binding and CI
 
 ## [v1.4.0]
@@ -80,6 +128,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Unified response encoding and error handling
 
 ## [v1.5.0]
@@ -92,6 +148,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Validator and HealthCheck middleware
 
 ## [v1.6.0]
@@ -104,6 +168,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Recovery middleware with stack trace capture
 
 ## [v1.7.0]
@@ -116,6 +188,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Compression middleware
 
 ## [v1.8.0]
@@ -128,6 +208,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - IP filter middleware with CIDR support
 
 ## [v1.9.0]
@@ -140,6 +228,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Request logger middleware
 
 ## [v2.0.0]
@@ -152,6 +248,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Timeout middleware
 
 ## [v2.1.0]
@@ -164,6 +268,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - WebSocket upgrade middleware
 
 ## [v2.2.0]
@@ -176,6 +288,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - OpenAPI spec serving with bundled Swagger UI
 
 ## [v2.3.0]
@@ -188,6 +308,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Prometheus metrics middleware
 
 ## [v2.4.0]
@@ -200,6 +328,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Cache middleware
 
 ## [v2.5.0]
@@ -212,6 +348,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - CORS middleware
 
 ## [v2.6.0]
@@ -224,6 +368,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - JWT authentication middleware
 
 ## [v2.7.0]
@@ -236,6 +388,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Rate limit middleware
 
 ## [v2.8.0]
@@ -248,6 +408,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Request ID middleware
 
 ## [v2.9.0]
@@ -260,6 +428,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Session and file upload middleware
 
 ## [v3.0.0]
@@ -272,6 +448,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Database integration via GORM
 
 ## [v3.1.0]
@@ -284,6 +468,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Redis integration
 
 ## [v3.2.0]
@@ -296,6 +488,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - Static file serving middleware
 
 ## [v3.3.0]
@@ -308,6 +508,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - gRPC server integration
 
 ## [v3.4.0]
@@ -320,6 +528,14 @@
   validation with struct binding is not implemented
 
 ### Added
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
+
+### Fixed
 - API versioning with header, path and query strategies
 
 ## [v3.4.1]
@@ -358,6 +574,13 @@ landed; every entry names the file so it can be reviewed directly.
 - **`gofault new` wrote outside the working directory.** The project name was
   not validated, so `gofault new ../evil` scaffolded elsewhere
   (`cmd/gofault/main.go`)
+- **Compression and the cache middleware corrupted error responses.** Both swap
+  `ctx.Response` for their own writer and neither restored it, so the router
+  handed the exception filter a *Ctx pointing at a buffer nobody reads. A failed
+  request came back as 200 with an empty body. Every middleware unit test passed
+  while the assembled framework was broken; only an end-to-end test could see it
+- Compression also committed the capture's default 200 status line on the error
+  path, turning the filter's write into a no-op
 
 ### Concurrency and correctness
 
@@ -451,7 +674,6 @@ it, so `internal/deadfield` now fails the build on both this and the next class.
 - **`gofault version` reported a hardcoded `v1.0.0`**
 
 ### Added
-
 - `middleware.CacheBackend`, so a cache need not live in the process.
   `*InMemoryCache` satisfies it, so existing callers are unaffected, and
   `redis.HTTPBackend` makes the integration the old comment promised
@@ -464,6 +686,12 @@ it, so `internal/deadfield` now fails the build on both this and the next class.
   the old names conflated
 - A `submodules` CI job that builds and vets `testapp3`, invisible to a
   root-level `go test ./...`
+- End-to-end tests (`-tags e2e`) driving the assembled framework: a real server,
+  the router, a full middleware chain and real concurrent clients, plus fault
+  injection for aborted and slow requests
+- Integration tests (`-tags integration`) against real MySQL and PostgreSQL, so
+  the generated DSN is parsed by an actual driver rather than compared as a
+  string. Both suites run in CI and skip locally when the servers are absent
 
 ### Changed
 
