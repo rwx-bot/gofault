@@ -162,7 +162,7 @@ func (c *container) ResolveFromCtx(ctx context.Context, target any) (any, error)
 	e, isSingleton := c.singletons[t]
 	c.mu.RUnlock()
 	if isSingleton {
-		return c.resolveSingleton(e, t)
+		return c.resolveSingleton(e)
 	}
 
 	// Check transient.
@@ -219,7 +219,7 @@ func (c *container) resolveRequestScoped(ctx context.Context, e *entry, t reflec
 // lock-free was a data race: concurrent resolves of the same not-yet-created
 // singleton raced on the field, and the fast path could observe a partially
 // written interface value.
-func (c *container) resolveSingleton(e *entry, t reflect.Type) (any, error) {
+func (c *container) resolveSingleton(e *entry) (any, error) {
 	// Fast path: already instantiated.
 	c.mu.RLock()
 	inst := e.inst
@@ -273,7 +273,7 @@ func (c *container) resolveType(t reflect.Type) (any, error) {
 	if isSingleton {
 		// Same path as ResolveFromCtx, so both entry points share one
 		// implementation and one locking discipline.
-		return c.resolveSingleton(e, t)
+		return c.resolveSingleton(e)
 	}
 
 	// Check transients.

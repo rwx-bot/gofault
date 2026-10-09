@@ -69,7 +69,7 @@ func (a *App) RegisterModules(mods ...*core.Module) error {
 // captured by reference instead of by value.
 func makeHandler(ctrl core.Controller, route core.Route) core.Handler {
 	return func(ctx *core.Ctx) error {
-		return controller.InvokeHandler(ctrl, route.Method, route.Path, route.Handler, ctx)
+		return controller.InvokeHandler(ctrl, route.Handler, ctx)
 	}
 }
 

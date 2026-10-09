@@ -1,15 +1,20 @@
-// Package deadfield guards against configuration fields that are declared and
-// documented but never read.
+// Package deadfield guards against declared-but-inert code: configuration
+// fields that are documented but never read, and function parameters that are
+// accepted but never used.
 //
-// Go reports nothing for a struct field nobody uses, and go vet does not check
-// for it either, so a documented option can be silently inert. This package
-// found six such fields in gofault (gorm.Config.Silent,
-// static.FollowSymLinks, ipfilter.Mode and three others), two of which had
-// security consequences: FollowSymLinks left symlink escapes open and ipfilter
-// Mode made an allow-list fall back to deny-by-block.
+// Go reports nothing for either. go vet does not check for them either, so a
+// documented option can be silently inert and a signature can promise
+// behaviour it never performs.
 //
-// The check is an AST scan rather than a grep so that writes are distinguished
-// from reads and reflective struct tags are accounted for.
+// Both classes produced real defects in gofault. Six config fields were inert,
+// two with security consequences: static.FollowSymLinks left symlink escapes
+// open, and ipfilter.Mode made an allow-list fall back to deny-by-block.
+// InvokeHandler took an HTTP method and path it never read, while its name and
+// signature implied it dispatched on them.
+//
+// The checks are AST scans rather than greps so that writes are distinguished
+// from reads, reflective struct tags are accounted for, and a parameter shadowed
+// by a local declaration is not misreported.
 package deadfield
 
 import (
@@ -32,12 +37,28 @@ type Field struct {
 	DeclaringFile string
 }
 
+// UnusedParam is a function parameter that is declared but never referenced in
+// the body. It usually means the signature promises behaviour that does not
+// exist.
+type UnusedParam struct {
+	// Func is the name of the function.
+	Func string
+	// Param is the parameter name.
+	Param string
+	// Position is "file:line" of the declaration.
+	Position string
+}
+
 // Report is the result of a scan.
 type Report struct {
 	// Dead lists exported fields with no read anywhere in the module.
 	Dead []Field
 	// Allowlisted maps a field to the reason it is exempt.
 	Allowlisted map[string]string
+	// UnusedParams lists parameters accepted but never used.
+	UnusedParams []UnusedParam
+	// ParamAllowlisted maps "Func.Param" to the reason it is exempt.
+	ParamAllowlisted map[string]string
 }
 
 // ConfigStacks lists fields that are exempt because they exist to be read by
@@ -232,7 +253,76 @@ func Scan(dir string) (Report, error) {
 			DeclaringFile: file,
 		})
 	}
+	rep.UnusedParams, rep.ParamAllowlisted = scanUnusedParams(fset, moduleFiles, paramAllowlist)
+
 	return rep, nil
+}
+
+// paramAllowlist exempts parameters that are unused by design. Every entry needs
+// a reason, because an unused parameter usually means the signature is lying
+// about what the function does.
+var paramAllowlist = map[string]string{
+	// Handler methods must match the framework's handler signature, so an
+	// action that does not read the context cannot drop the parameter.
+	"ExampleController.Error": "framework handler signature",
+}
+
+// scanUnusedParams finds parameters that are declared but never referenced in
+// the function body.
+//
+// The scan is scope-aware in one respect: a parameter whose name is reused by a
+// := declaration inside the body is still counted as used, because the author
+// clearly referred to it. Blank parameters are ignored by definition.
+func scanUnusedParams(fset *token.FileSet, files []string, allow map[string]string) ([]UnusedParam, map[string]string) {
+	var found []UnusedParam
+	usedAllow := map[string]string{}
+
+	for _, path := range files {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			continue
+		}
+		rel, _ := filepath.Rel(filepath.Dir(path), path)
+
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || fd.Recv != nil {
+				// Methods are skipped: an interface implementation often takes
+				// parameters it has no use for.
+				continue
+			}
+
+			// Any identifier appearing in the body counts as a reference,
+			// including inside nested closures.
+			referenced := map[string]bool{}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok {
+					referenced[id.Name] = true
+				}
+				return true
+			})
+
+			for _, field := range fd.Type.Params.List {
+				for _, name := range field.Names {
+					if name.Name == "_" || referenced[name.Name] {
+						continue
+					}
+					key := fd.Name.Name + "." + name.Name
+					if reason, ok := allow[key]; ok {
+						usedAllow[key] = reason
+						continue
+					}
+					found = append(found, UnusedParam{
+						Func:     fd.Name.Name,
+						Param:    name.Name,
+						Position: rel,
+					})
+				}
+			}
+		}
+	}
+
+	return found, usedAllow
 }
 
 // hasSchemaTag reports whether a struct tag is consumed reflectively, which

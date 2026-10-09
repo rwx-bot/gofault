@@ -124,7 +124,7 @@ func TestInvokeHandler(t *testing.T) {
 	ctrl := &greetController{called: &called}
 	ctx := core.NewCtx(httptest.NewRecorder(), httptest.NewRequest("GET", "/greet", nil))
 
-	if err := InvokeHandler(ctrl, "GET", "/greet", "Greet", ctx); err != nil {
+	if err := InvokeHandler(ctrl, "Greet", ctx); err != nil {
 		t.Fatalf("InvokeHandler: %v", err)
 	}
 	if !called {
@@ -136,7 +136,7 @@ func TestInvokeHandler_UnknownMethod(t *testing.T) {
 	ctrl := &greetController{}
 	ctx := core.NewCtx(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
-	if err := InvokeHandler(ctrl, "GET", "/x", "Nope", ctx); err == nil {
+	if err := InvokeHandler(ctrl, "Nope", ctx); err == nil {
 		t.Error("expected an error for a missing handler method")
 	}
 }
@@ -153,7 +153,7 @@ func TestInvokeHandler_WrongSignatureDoesNotPanic(t *testing.T) {
 		}
 	}()
 
-	if err := InvokeHandler(ctrl, "GET", "/bad", "Bad", ctx); err == nil {
+	if err := InvokeHandler(ctrl, "Bad", ctx); err == nil {
 		t.Error("expected an error for a handler with the wrong signature")
 	}
 }

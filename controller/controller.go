@@ -43,7 +43,11 @@ func Query(ctx *core.Ctx, name string) string {
 // exists but has a different signature is a programming error, and is reported
 // as such rather than panicking: a bare type assertion on an action with the
 // wrong signature would take the process down from inside request handling.
-func InvokeHandler(ctrl core.Controller, method, path, handlerName string, ctx *core.Ctx) error {
+//
+// The HTTP method and path are not consulted. Routing has already happened by
+// the time a handler runs, so they were dead parameters that made the signature
+// suggest a dispatch that never occurred.
+func InvokeHandler(ctrl core.Controller, handlerName string, ctx *core.Ctx) error {
 	v := reflect.ValueOf(ctrl)
 	methodVal := v.MethodByName(handlerName)
 	if !methodVal.IsValid() {

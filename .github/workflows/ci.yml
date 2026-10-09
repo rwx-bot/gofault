@@ -39,12 +39,15 @@ jobs:
       - name: Run tests
         run: go test ./... -race -coverprofile=coverage.out
 
-      # Fails on exported struct fields that nothing reads. Six shipped that
-      # way, two with security consequences (static.FollowSymLinks left symlink
-      # escapes open, ipfilter.Mode silently downgraded an allow list), and the
-      # compiler and go vet are both silent about it.
-      - name: Guard against dead config fields
-        run: go test ./internal/deadfield/ -run TestNoDeadConfigFields -v
+      # Fails on declared-but-inert code: exported struct fields nothing reads,
+      # and function parameters that are accepted but never used. Nine shipped
+      # that way, two with security consequences (static.FollowSymLinks left
+      # symlink escapes open, ipfilter.Mode silently downgraded an allow list).
+      # The compiler and go vet are both silent about both classes.
+      - name: Guard against inert declarations
+        run: |
+          go test ./internal/deadfield/ -run TestNoDeadConfigFields -v
+          go test ./internal/deadfield/ -run TestNoUnusedParameters -v
 
       - name: Display coverage
         run: go tool cover -func=coverage.out
