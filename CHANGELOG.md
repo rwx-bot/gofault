@@ -324,168 +324,177 @@
 
 ## [v3.4.1]
 
-### Fixed
-- A disabled middleware no longer panics every request. Every constructor in the
-  middleware package returns nil when its config is disabled, and the documented
-  usage registers whatever the constructor returns, so a nil landed in the chain
-  and `runChain` called it. Nil entries are now dropped in
-  Module.RegisterMiddleware, Router.Middleware and Router.Handle. This was
-  reachable before v3.4.1 and was made likely by the JWT change below
-- JWTAuth returns a middleware that rejects requests with a diagnostic instead
-  of nil for an unusable config. MustJWTAuth is available for callers who prefer
-  to fail fast at setup
-
-### Fixed
-- RateLimiter leaked a goroutine per instance for the life of the process. Its
-  cleanup loop had no exit condition and there was no way to stop it, so
-  constructing one limiter per tenant leaked one goroutine each time. Added
-  Close, which is idempotent
-- RateLimiter's per-key map grew without bound. Timed-out buckets were only
-  reaped by a 5-minute ticker, so a client rotating keys could add entries far
-  faster than they were dropped. Added MaxKeys (default 10000), evicting the
-  least recently used bucket when the cap is reached
-
-### Compatibility
-- Migration paths for the v3.4.1 breaking changes:
-  - LegacyJWTConfig(secret) restores the previous token handling (query-string
-    tokens allowed, tokens without an expiry accepted). Both weaken security
-  - JWTAuth no longer returns nil, so pre-v3.4.1 code that registered the result
-    unconditionally works again
-  - ValidatorConfig was removed because it had no effect; there is no
-    replacement, use ValidateRequest
+61 defects fixed across 25 commits. Grouped by what they were, not by when they
+landed; every entry names the file so it can be reviewed directly.
 
 ### Security
-- Static file serving: reject paths outside the root. The containment check
-  compared `HasPrefix(absPath, absDir)`, which also accepted sibling
-  directories sharing the root's name (root `/srv/www` served
-  `/srv/www-secret/...`)
-- File upload: sanitize the client-supplied filename before joining it onto the
-  storage root. A name such as `../../etc/cron.d/x` could previously write
-  outside `BaseDir`; `LocalStorage.Delete` had the same gap
+
+- **Static file serving escaped its root.** The containment check compared
+  `HasPrefix(absPath, absDir)`, so a sibling directory sharing the root's name
+  was served: root `/srv/www` served `/srv/www-secret/...`
+  (`middleware/static.go`)
+- **Static file serving followed symlinks out of the root.**
+  `Config.FollowSymLinks` was documented but never read, so with it false a
+  symlink inside the root pointing outside it was still served. The resolved
+  target is now validated against the resolved root
+- **File upload escaped its storage root.** The client-supplied filename was
+  joined onto `BaseDir` unsanitised, so `../../etc/cron.d/x` wrote outside it.
+  `LocalStorage.Delete` had the same gap (`middleware/upload.go`)
+- **CORS wildcard subdomains matched too much.** `*.example.com` accepted
+  `notexample.com` and `evil-example.com`, because the suffix was not required
+  to be preceded by a dot (`middleware/cors.go`)
+- **Rate limiting could be bypassed.** `DefaultKeyFunc` used the whole
+  `X-Forwarded-For` header as the key, so a client rotating the proxy chain got
+  a fresh bucket per request (`middleware/ratelimit.go`)
+- **A rejected JWT produced a successful response.** `Router.ServeHTTP` ignored
+  the return value of `ExceptionFilter.Capture`, whose contract says false lets
+  the exception propagate, so a declining filter left the client with 200 and an
+  empty body (`router/router.go`)
+- **Slowloris.** No `ReadHeaderTimeout` was set, so a client dribbling headers
+  held connections open indefinitely (`server/http.go`)
+- **A recovered gRPC panic was reported as success.** The four interceptors
+  recovered without setting an error, leaving the named results at `(nil, nil)`.
+  They now return `codes.Internal` and log a stack trace (`grpc/grpc.go`)
+- **`gofault new` wrote outside the working directory.** The project name was
+  not validated, so `gofault new ../evil` scaffolded elsewhere
+  (`cmd/gofault/main.go`)
+
+### Concurrency and correctness
+
+- **Concurrent requests ran each other's middleware.** `ServeHTTP` built the
+  chain with `append(r.middleware, ...)`, which writes into the router's backing
+  array whenever it has spare capacity, so simultaneous requests clobbered each
+  other's per-route middleware (`router/router.go`)
+- **A disabled middleware panicked every request.** Every constructor returns
+  nil when its config is disabled and the documented usage registers whatever it
+  returns, so a nil landed in the chain and `runChain` called it. Nil entries are
+  now dropped in `Module.RegisterMiddleware`, `Router.Middleware` and
+  `Router.Handle`. This was reachable before v3.4.1
+- **Module start order was non-deterministic.** `sortModules` walked a map, so
+  Go's randomised iteration decided the order: the same dependency graph
+  produced five different orders across forty runs (`module/module.go`)
+- **Three data races.** `Router.container`, and `App.server`/`App.booted` which
+  `Start` wrote while a signal handler calling `Stop` read them
+- **`ioc` raced on singletons.** `entry.inst` is written under the container
+  mutex but read without it, so concurrent first-resolves raced on the field and
+  the fast path could observe a partially written interface value
+- **Bind failures hung the process.** `StartWithGracefulShutdown` bound the port
+  inside a goroutine, so a port already in use was discarded and the call blocked
+  forever waiting for a signal (`server/http.go`)
+- **Graceful shutdown could not be retried.** It marked the server stopped
+  before attempting the shutdown, so a timeout looked like success on the next
+  call
+- **An exception filter's write could be silently dropped.** Compression
+  committed a status line even when the handler failed, so the filter's error
+  write became a no-op and the client saw 2xx for a failed request
+- **`Wrap` lost the HTTP status.** `IsHTTPException` used a direct type
+  assertion, so an HTTPException wrapped with `fmt.Errorf("%w")` was reported as
+  500 instead of its own status (`exception/exception.go`)
+- **`InvokeHandler` panicked on a wrong signature.** A bare type assertion on
+  the controller action took down request handling
+- **HEAD and 405 semantics were wrong.** HEAD 404ed against a GET route, and a
+  path that matched under a different method reported 404 instead of 405 with an
+  `Allow` header (`router/router.go`)
+
+### Resource leaks
+
+- **`NewRateLimiter` leaked a goroutine per instance.** The cleanup loop had no
+  exit condition and there was no way to stop it: 200 limiters left 200
+  goroutines behind. Added an idempotent `Close`
+- **The rate limiter's key map grew without bound.** Timed-out buckets were only
+  reaped by a 5-minute ticker, so rotating keys outpaced it. Added `MaxKeys`
+  (default 10000) with least-recently-used eviction
+- **`redis.NewClient` leaked its pool on failure.** The connectivity probe
+  returned an error without closing the client. Verified: 50 failed
+  constructions now leave the goroutine count unchanged
+
+### Configuration that did nothing
+
+Each of these was documented as working and read by nothing. Go is silent about
+it, so `internal/deadfield` now fails the build on both this and the next class.
+
+- `gorm.Config.Silent` never suppressed logging; it now selects `logger.Discard`
+- `exception.IncludeStackTrace` never populated a stack; it now does, off by
+  default since the stack exposes internal paths
+- `versioning.HeaderVersionFormat` was stored and never applied;
+  `HeaderConfig` now derives a regex from it as documented
+- `static.FollowSymLinks` and `ipfilter.Mode` are covered above under Security
+- `InvokeHandler` accepted an HTTP method and path and read neither, so its
+  signature implied a dispatch that never happened. Both parameters removed
+- `middleware.ValidatorConfig` documented a validator middleware that does not
+  exist; nothing read it. Removed
+
+### Other correctness
+
+- **The scaffold did not compile.** `main.go` imported `<name>/controllers` as
+  `github.com/gofault/gofault/<name>/controllers`, and the generated controller
+  returned `(int, error)` from a method declared `error`. `testapp3` carried the
+  same two defects and, being a separate module, was never compiled by
+  `go test ./...` (`cmd/gofault/main.go`)
+- **`metrics.normalizePath` was a stub**, so every distinct ID became a new
+  Prometheus series
+- **The request logger built its attributes and discarded them**, producing no
+  output at all, and `readRequestBody` returned an empty string
+- **A duplicate DI registration silently replaced the first**, so a later typo
+  looked like it had taken effect. Now returns `ErrDuplicateRegistration`
+- **Configuration was never validated.** An unknown key such as `sever.port` was
+  ignored, leaving the server on its default port. `Load` now rejects unknown
+  fields and validates ports, drivers and log settings
+- **`GetDSN` always emitted the MySQL form**, which PostgreSQL and SQLite drivers
+  cannot parse
+- **Compression was O(n²)** for large responses, accumulating into a `[]byte` by
+  repeated append
+- **The OpenAPI document never listed a route.** `AddPath` existed but was never
+  called, so the published spec had no paths
+- **A panicking health checker took down the health endpoint**; it is now
+  reported as down
+- **`gofault version` reported a hardcoded `v1.0.0`**
+
+### Added
+
+- `middleware.CacheBackend`, so a cache need not live in the process.
+  `*InMemoryCache` satisfies it, so existing callers are unaffected, and
+  `redis.HTTPBackend` makes the integration the old comment promised
+- `internal/deadfield`, an AST-based guard that fails the build on an exported
+  field nothing reads and on a function parameter never used. Exempt entries
+  need a reason and a second test fails when an exemption goes stale
+- `server.HTTP.Server()` for advanced configuration
+- `OpenAPIHandler`, `RegisterOpenAPI`, `HealthCheckHandler` and
+  `RegisterHealthCheckEndpoint`, which separate the handler and middleware roles
+  the old names conflated
+- A `submodules` CI job that builds and vets `testapp3`, invisible to a
+  root-level `go test ./...`
 
 ### Changed
-- JWT: query-string tokens are now opt-in via `JWTConfig.AllowQueryToken`
-  (default false). A token in a URL leaks into access logs, `Referer` headers
-  and browser history
-- JWT: tokens without an `exp` claim are rejected by default. Relax with
-  `JWTConfig.RequireExpiry = false`
-- JWT: `GenerateToken` now honors its `algorithm` argument and returns an error
-  for anything but HS256, instead of silently signing with HS256 under a
-  different label
-- JWT: `parseToken` verifies the `alg` header after the signature, so a token
-  cannot declare an algorithm it was not signed with
-- JWT: `JWTAuth` returns `nil` for an empty secret or unsupported algorithm,
-  failing closed at wiring time
-- `controller.InvokeHandler` reports a handler whose signature is not
-  `func(*core.Ctx) error` instead of panicking on the type assertion
-- CLI: `gofault new` rejects a project name that is not a single path segment,
-  so `gofault new ../evil` no longer scaffolds outside the working directory
-- CLI: scaffolded `go.mod` pins `github.com/gofault/gofault v0.0.0` (resolved by
-  the local `replace`) instead of the non-existent `v1.0.0`; `gofault version`
-  reports the release rather than a hardcoded `v1.0.0`
 
-### Fixed
-- Server: `StartWithGracefulShutdown` bound the port inside a goroutine, so a
-  bind failure (port in use) was lost and the call blocked forever waiting for a
-  signal. The listener is now opened up front and the error is returned
-- Server: `Start` returned `http.ErrServerClosed` after a normal graceful
-  shutdown, which callers had to special-case. It now returns nil
-- Server: `GracefulShutdown` marked the server stopped before attempting the
-  shutdown, so a timeout could never be retried and the failure was reported as
-  success on the next call. The result is memoised and hooks run exactly once
-- Server: no `ReadHeaderTimeout` was set, leaving the server open to Slowloris
-  (a client dribbling headers holds connections indefinitely). Defaults to
-  10s; override via the new `Server()` accessor
-- Static: `FollowSymLinks` was documented but never applied, so a symlink
-  inside the root pointing outside it was served while the option was false.
-  The resolved target is now validated against the resolved root
-- IP filter: `Mode` was documented but never read, so `Mode: "allow"` silently
-  behaved like `"block"`. Block and allow are now evaluated per Mode, with an
-  unrecognised value falling back to the deny-by-default behaviour
-- Exception: `Wrap` (and any `fmt.Errorf("%w")`) hid the HTTPException from
-  `IsHTTPException`/`HTTPExceptionOf`, which used a direct type assertion, so a
-  wrapped 400 was reported as 500. Both now use `errors.As`
-- Exception: `HTTPExceptionFilter.IncludeStackTrace` was documented but never
-  applied. It now populates a `stack` field, off by default because the stack
-  exposes internal paths and symbols
-- Versioning: `HeaderVersionFormat` was stored but never applied; the middleware
-  only read `HeaderVersionRE`. `HeaderConfig` now derives a regex from the
-  format when none is supplied, as its documentation promised
+- JWT: query-string tokens are opt-in via `AllowQueryToken`, and tokens without
+  an `exp` claim are rejected unless `RequireExpiry` is disabled. Both defaults
+  are safer; `LegacyJWTConfig` restores the old behaviour for a deliberate
+  migration
+- `JWTAuth` returns a middleware that rejects requests with a diagnostic for an
+  unusable config, instead of nil. `MustJWTAuth` is available for callers who
+  prefer to fail fast at setup
+- `CacheMiddleware` takes a `CacheBackend` rather than a concrete type
+- `server.HTTP.Start` returns nil rather than `http.ErrServerClosed` after a
+  graceful shutdown
+- `InvokeHandler` takes only the handler name
+- CLI: the scaffold pins `gofault v0.0.0`, resolved by the local `replace`,
+  instead of the non-existent `v1.0.0`, and targets the current Go version
 
 ### Removed
-- `middleware.ValidatorConfig` (with `BindTarget` and `SkipMissing`). It was
-  documented as the configuration for a validator middleware, but no validator
-  middleware exists and nothing ever read the struct, so setting it silently did
-  nothing. `ValidateRequest(ctx, rules)` remains the supported API. Route-scoped
+
+- `middleware.ValidatorConfig`, which had no consumer and no effect.
+  `ValidateRequest(ctx, rules)` remains the supported API; route-scoped
   validation with struct binding is not implemented
 
-### Added
-- `server.HTTP.Server()` exposes the underlying `*http.Server` for advanced
-  configuration
-- gRPC: a panic in any interceptor was recovered but never converted to an
-  error, so the named results stayed at `(nil, nil)` and gRPC reported the
-  call as a **success with a nil response**. `UnaryInterceptor`,
-  `StreamInterceptor`, `RecoveryInterceptor` and `StreamRecoveryInterceptor` now
-  return `codes.Internal` and log the panic with a stack trace. The old
-  `TestRecoveryInterceptor` asserted `err == nil` after a panic, which pinned
-  the defect in place
-- gRPC interceptors logged with `fmt.Printf`, against the structured-logging
-  rule in AGENTS.md. They now use `slog.Default()`
-- Redis: `NewClient` returned an error after a failed connectivity probe
-  without closing the client, leaking the connection pool and its goroutines.
-  Verified: 50 failed constructions now leave the goroutine count unchanged
-- GORM: `Config.Silent` was documented as suppressing all GORM logs but was
-  never read, so `LogLevel` alone decided verbosity. It now selects
-  `logger.Discard`
-- Removed dead `dbInstance`/`dbOnce` and `clientInstance`/`clientOnce` globals
+### Test results
 
-### Removed
-- `middleware.ValidatorConfig` (with `BindTarget` and `SkipMissing`). It was
-  documented as the configuration for a validator middleware, but no validator
-  middleware exists and nothing ever read the struct, so setting it silently did
-  nothing. `ValidateRequest(ctx, rules)` remains the supported API. Route-scoped
-  validation with struct binding is not implemented
+Statement coverage 50.0% -> 86.9%. `controller` 31.6% -> 100%, `core` 58.3%
+-> 100%, `exception` 77.1% -> 98.2%, `redis` 78.8% -> 88.5%, `grpc` 81.6%
+-> 88.3%, `gorm` 74.1% -> 83.3%, `server` 56.0% -> 90.0%.
 
-### Added
-- `middleware.CacheBackend` interface, so a cache no longer has to live in the
-  process. `CacheMiddleware` accepts it; `*InMemoryCache` satisfies it, so
-  existing callers are unaffected
-- `redis.HTTPBackend` adapts `redis.Cache` to `middleware.CacheBackend`, making
-  the integration the old comment on `redis.Cache` claimed. Cache misses and
-  Redis outages degrade to a miss rather than failing the request
-- Concurrent requests could execute each other's middleware chain.
-  `Router.ServeHTTP` built the chain with `append(r.middleware, ...)`, which
-  writes into the router's backing array whenever it has spare capacity, so
-  simultaneous requests clobbered one another's per-route middleware
-- `Router.container` was read on every request and written by `SetContainer`
-  without synchronization; it is now guarded by a `sync.RWMutex`
-- Data race between `App.Start` and `App.Stop`: `server` and `booted` were
-  written on the start goroutine while a signal handler calling `Stop` read
-  them. `App` fields are now guarded by a mutex
-- `testapp3` did not compile: its handlers returned `(int, error)` from a
-  method declared `error`. It is a separate module, so `go test ./...` from
-  the repo root never covered it
-- The `gofault new` scaffold produced a project that could not build: `main.go`
-  imported `<name>/controllers` as `github.com/gofault/gofault/<name>/controllers`,
-  and the generated controller had the same bad return signature
-- `examples/hello` registered `loggingMiddleware` on both the module and the
-  router, so it ran twice per request
-
-### Tests
-- Statement coverage 83.0% overall. `controller` 31.6% -> 100%, `core` 58.3%
-  -> 100%, `module` 51.7% -> 92.5%, `cmd/gofault` 0% -> 69.9%
-- Added `middleware/security_test.go` and lifecycle tests covering `App.Start`
-  and `App.Stop` concurrently, which is what surfaced the races above
-- `TestCreateProject_OutputCompiles` builds a freshly scaffolded project, so a
-  broken template fails the suite instead of the user's first `go build`
-- `TestRouter_ConcurrentRequestsDoNotShareChain` reproduces the chain-aliasing
-  bug under `-race`
-
-### CI
-- Added `internal/deadfield`, an AST-based guard that fails when an exported
-  struct field is never read, and wired it into CI. Exempt fields require an
-  explicit allowlist entry with a reason, and a second test fails if an
-  allowlist entry goes stale. This is what the six dead config fields in this
-  release had in common: the compiler and go vet are both silent about them
-- Added a `submodules` job that builds and vets `testapp3`, and made `release`
-  depend on it. Nested modules are invisible to `go test ./...` from the root
+Every fix has a test that fails when the fix is reverted. Notable additions:
+randomised coverage of the topological sort over 200 generated dependency
+graphs, a concurrency test driving 10000 requests through a middleware stack
+while watching the goroutine count, and a test that compiles a freshly
+scaffolded project.
