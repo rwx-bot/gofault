@@ -137,3 +137,33 @@ func TestCompressionMiddleware_WithGzip(t *testing.T) {
 		t.Errorf("Expected decompressed body length 2000, got %d", len(body))
 	}
 }
+
+// Flush is provided so streaming handlers keep working through the buffer. It
+// had no coverage, so a streaming handler could have silently broken.
+func TestCompressCapture_FlushDelegates(t *testing.T) {
+	rec := &flushRecorder{header: make(http.Header)}
+	capture := newCompressCapture(rec)
+
+	_, _ = capture.Write([]byte("x"))
+	capture.Flush()
+
+	if !rec.flushed {
+		t.Error("Flush did not reach the underlying writer")
+	}
+}
+
+// A handler holding the buffered writer as an http.Flusher must be able to
+// flush without an error.
+func TestCompressCapture_SatisfiesFlusher(t *testing.T) {
+	var _ http.Flusher = newCompressCapture(httptest.NewRecorder())
+}
+
+type flushRecorder struct {
+	header  http.Header
+	flushed bool
+}
+
+func (f *flushRecorder) Header() http.Header         { return f.header }
+func (f *flushRecorder) Write(b []byte) (int, error) { return len(b), nil }
+func (f *flushRecorder) WriteHeader(int)             {}
+func (f *flushRecorder) Flush()                      { f.flushed = true }

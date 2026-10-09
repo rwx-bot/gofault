@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -500,4 +501,75 @@ func TestServer_WithStreamInterceptors(t *testing.T) {
 	}
 
 	_ = s
+}
+
+// StreamInterceptor's panic recovery was implemented but never exercised: the
+// earlier TestStreamInterceptor only started and stopped a server without
+// calling the interceptor at all. A panic here used to leave the named result
+// at its zero value, so gRPC saw a successful stream.
+func TestStreamInterceptor_PanicBecomesError(t *testing.T) {
+	interceptor := StreamInterceptor(func(srv interface{}, ss grpc.ServerStream) error {
+		panic("stream boom")
+	})
+
+	err := interceptor(nil, nil, &grpc.StreamServerInfo{FullMethod: "/svc/Stream"}, nil)
+	if err == nil {
+		t.Fatal("expected an error after a recovered panic, got nil")
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("status code = %v, want %v", code, codes.Internal)
+	}
+}
+
+// The non-panicking path must still return the function's own error.
+func TestStreamInterceptor_PassesThrough(t *testing.T) {
+	want := errors.New("stream failed")
+	interceptor := StreamInterceptor(func(srv interface{}, ss grpc.ServerStream) error {
+		return want
+	})
+
+	got := interceptor(nil, nil, &grpc.StreamServerInfo{}, nil)
+	if !errors.Is(got, want) {
+		t.Errorf("error = %v, want %v", got, want)
+	}
+}
+
+func TestStreamInterceptor_NilFuncResult(t *testing.T) {
+	interceptor := StreamInterceptor(func(srv interface{}, ss grpc.ServerStream) error {
+		return nil
+	})
+	if err := interceptor(nil, nil, nil, nil); err != nil {
+		t.Errorf("error = %v, want nil", err)
+	}
+}
+
+// A nil info must not cause a second panic while the first is being reported.
+func TestStreamInterceptor_NilInfo(t *testing.T) {
+	interceptor := StreamInterceptor(func(srv interface{}, ss grpc.ServerStream) error {
+		panic("boom")
+	})
+
+	err := interceptor(nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("status code = %v, want %v", code, codes.Internal)
+	}
+}
+
+// UnaryInterceptor must also pass a non-panicking result through unchanged.
+func TestUnaryInterceptor_PassesThrough(t *testing.T) {
+	want := errors.New("unary failed")
+	interceptor := UnaryInterceptor(func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "resp", want
+	})
+
+	resp, err := interceptor(context.Background(), "req", &grpc.UnaryServerInfo{}, nil)
+	if !errors.Is(err, want) {
+		t.Errorf("error = %v, want %v", err, want)
+	}
+	if resp != "resp" {
+		t.Errorf("resp = %v, want resp", resp)
+	}
 }

@@ -263,3 +263,67 @@ func TestOpenDB_SilentSuppressesLogging(t *testing.T) {
 		t.Error("Silent had no effect: both loggers are identical")
 	}
 }
+
+// The shutdown hook closes the pool. It had no coverage, so a broken hook would
+// leak the connection pool for the life of the process.
+func TestDatabase_ShutdownHookClosesPool(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Dialect = DialectSQLite
+	cfg.DSN = ":memory:"
+	cfg.Silent = true
+
+	d, err := NewDatabase("shutdown", cfg)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+
+	sqlDB, err := d.DB.DB()
+	if err != nil {
+		t.Fatalf("db handle: %v", err)
+	}
+
+	hook := &gormShutdown{d.DB}
+	if err := hook.OnShutdown(); err != nil {
+		t.Fatalf("OnShutdown: %v", err)
+	}
+
+	if err := sqlDB.Ping(); err == nil {
+		t.Error("expected the closed pool to reject a Ping")
+	}
+}
+
+// NewDatabase registers the shutdown hook; calling it twice must not panic,
+// since App.Stop can run more than once.
+func TestDatabase_ShutdownHookTwice(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Dialect = DialectSQLite
+	cfg.DSN = ":memory:"
+	cfg.Silent = true
+
+	d, err := NewDatabase("shutdown-twice", cfg)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+
+	hook := &gormShutdown{d.DB}
+	if err := hook.OnShutdown(); err != nil {
+		t.Fatalf("first OnShutdown: %v", err)
+	}
+	// The second call must return rather than panic.
+	_ = hook.OnShutdown()
+}
+
+func TestMustNewDatabase_PanicsOnBadDSN(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected MustNewDatabase to panic on an unusable DSN")
+		}
+	}()
+
+	cfg := DefaultConfig()
+	cfg.Dialect = DialectMySQL
+	// Port 1 is reserved and never listening, so the open must fail.
+	cfg.DSN = "user:pass@tcp(127.0.0.1:1)/db?timeout=1s"
+
+	_ = MustNewDatabase("bad", cfg)
+}
